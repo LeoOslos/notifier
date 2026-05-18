@@ -23,9 +23,12 @@ module.exports = {
       TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN,
       TELEGRAM_CHAT_ID:   env.TELEGRAM_CHAT_ID,
       DB_PATH:            env.DB_PATH || path.join(__dirname, 'queue.db'),
-      POLL_INTERVAL:      env.POLL_INTERVAL || '2000',
-      MAX_RETRIES:        env.MAX_RETRIES   || '3',
-      BATCH_SIZE:         env.BATCH_SIZE    || '10'
+      POLL_INTERVAL:      env.POLL_INTERVAL    || '2000',
+      MAX_RETRIES:        env.MAX_RETRIES      || '3',
+      BATCH_SIZE:         env.BATCH_SIZE       || '10',
+      GOOGLE_HOME_IPS:    env.GOOGLE_HOME_IPS  || '',
+      TTS_PORT:           env.TTS_PORT         || '9876',
+      TTS_LANG:           env.TTS_LANG         || 'es'
     },
     error_file:      './logs/error.log',
     out_file:        './logs/output.log',

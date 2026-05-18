@@ -1,23 +1,33 @@
 'use strict';
 
 const https    = require('https');
+const http     = require('http');
 const path     = require('path');
+const fs       = require('fs');
+const os       = require('os');
 const Database = require('better-sqlite3');
 
-const TELEGRAM_TOKEN  = process.env.TELEGRAM_BOT_TOKEN  || '';
+// ── Config ────────────────────────────────────────────────────────────────────
+const TELEGRAM_TOKEN   = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID   || '';
-const DB_PATH         = process.env.DB_PATH || path.join(__dirname, 'queue.db');
-const POLL_INTERVAL   = parseInt(process.env.POLL_INTERVAL  || '2000');
-const MAX_RETRIES     = parseInt(process.env.MAX_RETRIES    || '3');
-const BATCH_SIZE      = parseInt(process.env.BATCH_SIZE     || '10');
+const DB_PATH          = process.env.DB_PATH             || path.join(__dirname, 'queue.db');
+const POLL_INTERVAL    = parseInt(process.env.POLL_INTERVAL || '2000');
+const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
+const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
 
+const GOOGLE_HOME_IPS  = (process.env.GOOGLE_HOME_IPS || '').split(',').map(s => s.trim()).filter(Boolean);
+const TTS_PORT         = parseInt(process.env.TTS_PORT || '9876');
+const TTS_LANG         = process.env.TTS_LANG || 'es';
+
+// ── Logging ───────────────────────────────────────────────────────────────────
 function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
+// ── DB ────────────────────────────────────────────────────────────────────────
 function initDb() {
   const db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');  // permite escrituras concurrentes de otros procesos
+  db.pragma('journal_mode = WAL');
   db.exec(`
     CREATE TABLE IF NOT EXISTS queue (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,11 +44,12 @@ function initDb() {
   return db;
 }
 
+// ── Telegram ──────────────────────────────────────────────────────────────────
 function sendTelegram(message) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       chat_id:    TELEGRAM_CHAT_ID,
-      text:       message.slice(0, 4096),  // límite de Telegram
+      text:       message.slice(0, 4096),
       parse_mode: 'HTML'
     });
     const req = https.request({
@@ -62,6 +73,94 @@ function sendTelegram(message) {
   });
 }
 
+// ── TTS HTTP server ───────────────────────────────────────────────────────────
+function getLocalIp() {
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const iface of ifaces) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+  return '127.0.0.1';
+}
+
+function startTtsServer() {
+  const server = http.createServer((req, res) => {
+    const filename = path.basename(req.url);
+    // solo sirve archivos generados por este proceso
+    if (!filename.startsWith('notifier_tts_') || !filename.endsWith('.mp3')) {
+      res.writeHead(404); res.end(); return;
+    }
+    const filepath = path.join(os.tmpdir(), filename);
+    if (!fs.existsSync(filepath)) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+    fs.createReadStream(filepath).pipe(res);
+  });
+  server.listen(TTS_PORT, () => log(`TTS server en :${TTS_PORT}`));
+  return server;
+}
+
+// ── Google Home ───────────────────────────────────────────────────────────────
+function generateTts(message) {
+  const gtts     = require('node-gtts')(TTS_LANG);
+  const filename = `notifier_tts_${Date.now()}.mp3`;
+  const filepath = path.join(os.tmpdir(), filename);
+  return new Promise((resolve, reject) => {
+    gtts.save(filepath, message, (err) => {
+      if (err) reject(err);
+      else resolve({ filename, filepath });
+    });
+  });
+}
+
+function castToDevice(deviceIp, audioUrl) {
+  const { Client, DefaultMediaReceiver } = require('castv2-client');
+  return new Promise((resolve, reject) => {
+    const client = new Client();
+    const timer  = setTimeout(() => {
+      client.close();
+      reject(new Error(`timeout conectando a ${deviceIp}`));
+    }, 15000);
+
+    client.connect(deviceIp, () => {
+      client.launch(DefaultMediaReceiver, (err, player) => {
+        if (err) { clearTimeout(timer); client.close(); return reject(err); }
+
+        player.load(
+          { contentId: audioUrl, contentType: 'audio/mpeg', streamType: 'BUFFERED' },
+          { autoplay: true },
+          (err) => {
+            if (err) { clearTimeout(timer); client.close(); return reject(err); }
+            player.on('status', (s) => {
+              if (s.playerState === 'IDLE') {
+                clearTimeout(timer); client.close(); resolve();
+              }
+            });
+          }
+        );
+      });
+    });
+
+    client.on('error', (err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
+async function sendGoogleHome(message) {
+  if (!GOOGLE_HOME_IPS.length) throw new Error('GOOGLE_HOME_IPS no configurado');
+
+  const localIp                = getLocalIp();
+  const { filename, filepath } = await generateTts(message);
+  const audioUrl               = `http://${localIp}:${TTS_PORT}/${filename}`;
+
+  log(`TTS generado: ${audioUrl}`);
+  try {
+    await Promise.all(GOOGLE_HOME_IPS.map(ip => castToDevice(ip, audioUrl)));
+  } finally {
+    // borra el archivo después de que los dispositivos hayan tenido tiempo de descargarlo
+    setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 30000);
+  }
+}
+
+// ── Process batch ─────────────────────────────────────────────────────────────
 async function processBatch(db) {
   const rows = db.prepare(`
     SELECT * FROM queue
@@ -72,7 +171,8 @@ async function processBatch(db) {
 
   for (const row of rows) {
     try {
-      if (row.channel === 'telegram') await sendTelegram(row.message);
+      if (row.channel === 'telegram')    await sendTelegram(row.message);
+      if (row.channel === 'google_home') await sendGoogleHome(row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel}`);
     } catch (err) {
@@ -84,6 +184,7 @@ async function processBatch(db) {
   }
 }
 
+// ── Main ──────────────────────────────────────────────────────────────────────
 function main() {
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
     log('ERROR: faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID');
@@ -91,7 +192,12 @@ function main() {
   }
 
   const db = initDb();
+  startTtsServer();
   log(`iniciado | db=${DB_PATH} | poll=${POLL_INTERVAL}ms | max_retries=${MAX_RETRIES}`);
+  if (GOOGLE_HOME_IPS.length)
+    log(`Google Home configurados: ${GOOGLE_HOME_IPS.join(', ')}`);
+  else
+    log('Google Home: no configurado (GOOGLE_HOME_IPS vacío)');
 
   let busy = false;
   setInterval(async () => {
