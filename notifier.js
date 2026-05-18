@@ -14,10 +14,9 @@ const DB_PATH          = process.env.DB_PATH             || path.join(__dirname,
 const POLL_INTERVAL    = parseInt(process.env.POLL_INTERVAL || '2000');
 const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
 const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
-
-const GOOGLE_HOME_IPS  = (process.env.GOOGLE_HOME_IPS || '').split(',').map(s => s.trim()).filter(Boolean);
-const TTS_PORT         = parseInt(process.env.TTS_PORT || '9876');
-const TTS_LANG         = process.env.TTS_LANG || 'es';
+const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
+const TTS_LANG         = process.env.TTS_LANG               || 'es';
+const DISCOVERY_INTERVAL = parseInt(process.env.DISCOVERY_INTERVAL || '300000'); // 5 min
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 function log(msg) {
@@ -86,7 +85,6 @@ function getLocalIp() {
 function startTtsServer() {
   const server = http.createServer((req, res) => {
     const filename = path.basename(req.url);
-    // solo sirve archivos generados por este proceso
     if (!filename.startsWith('notifier_tts_') || !filename.endsWith('.mp3')) {
       res.writeHead(404); res.end(); return;
     }
@@ -97,6 +95,43 @@ function startTtsServer() {
   });
   server.listen(TTS_PORT, () => log(`TTS server en :${TTS_PORT}`));
   return server;
+}
+
+// ── mDNS discovery ────────────────────────────────────────────────────────────
+let discoveredDevices = []; // [{ name, ip }]
+let scanning = false;
+
+function discoverDevices() {
+  if (scanning) return;
+  scanning = true;
+
+  const { Bonjour } = require('bonjour-service');
+  const bonjour = new Bonjour();
+  const found   = [];
+
+  const browser = bonjour.find({ type: 'googlecast' }, (service) => {
+    const ip = (service.addresses || []).find(a => /^\d+\.\d+\.\d+\.\d+$/.test(a));
+    if (ip && !found.some(d => d.ip === ip)) {
+      found.push({ name: service.name, ip });
+    }
+  });
+
+  setTimeout(() => {
+    browser.stop();
+    bonjour.destroy();
+    scanning = false;
+    if (found.length) {
+      discoveredDevices = found;
+      log(`Google Home: ${found.map(d => `${d.name}(${d.ip})`).join(', ')}`);
+    } else {
+      log('Google Home: ningún dispositivo encontrado por mDNS');
+    }
+  }, 5000);
+}
+
+function startDiscovery() {
+  discoverDevices();
+  setInterval(discoverDevices, DISCOVERY_INTERVAL);
 }
 
 // ── Google Home ───────────────────────────────────────────────────────────────
@@ -124,7 +159,6 @@ function castToDevice(deviceIp, audioUrl) {
     client.connect(deviceIp, () => {
       client.launch(DefaultMediaReceiver, (err, player) => {
         if (err) { clearTimeout(timer); client.close(); return reject(err); }
-
         player.load(
           { contentId: audioUrl, contentType: 'audio/mpeg', streamType: 'BUFFERED' },
           { autoplay: true },
@@ -145,19 +179,26 @@ function castToDevice(deviceIp, audioUrl) {
 }
 
 async function sendGoogleHome(message) {
-  if (!GOOGLE_HOME_IPS.length) throw new Error('GOOGLE_HOME_IPS no configurado');
+  if (!discoveredDevices.length) throw new Error('No hay dispositivos Google Home descubiertos');
 
   const localIp                = getLocalIp();
   const { filename, filepath } = await generateTts(message);
   const audioUrl               = `http://${localIp}:${TTS_PORT}/${filename}`;
+  log(`TTS url: ${audioUrl}`);
 
-  log(`TTS generado: ${audioUrl}`);
-  try {
-    await Promise.all(GOOGLE_HOME_IPS.map(ip => castToDevice(ip, audioUrl)));
-  } finally {
-    // borra el archivo después de que los dispositivos hayan tenido tiempo de descargarlo
-    setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 30000);
+  const results = await Promise.allSettled(
+    discoveredDevices.map(d => castToDevice(d.ip, audioUrl))
+  );
+
+  const failures = results.filter(r => r.status === 'rejected');
+  if (failures.length) {
+    log(`${failures.length} dispositivo(s) fallaron, redescubriendo...`);
+    discoverDevices();
+    if (failures.length === discoveredDevices.length)
+      throw new Error(failures.map(f => f.reason.message).join('; '));
   }
+
+  setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 30000);
 }
 
 // ── Process batch ─────────────────────────────────────────────────────────────
@@ -193,11 +234,8 @@ function main() {
 
   const db = initDb();
   startTtsServer();
+  startDiscovery();
   log(`iniciado | db=${DB_PATH} | poll=${POLL_INTERVAL}ms | max_retries=${MAX_RETRIES}`);
-  if (GOOGLE_HOME_IPS.length)
-    log(`Google Home configurados: ${GOOGLE_HOME_IPS.join(', ')}`);
-  else
-    log('Google Home: no configurado (GOOGLE_HOME_IPS vacío)');
 
   let busy = false;
   setInterval(async () => {

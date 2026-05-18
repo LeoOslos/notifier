@@ -26,9 +26,9 @@ module.exports = {
       POLL_INTERVAL:      env.POLL_INTERVAL    || '2000',
       MAX_RETRIES:        env.MAX_RETRIES      || '3',
       BATCH_SIZE:         env.BATCH_SIZE       || '10',
-      GOOGLE_HOME_IPS:    env.GOOGLE_HOME_IPS  || '',
-      TTS_PORT:           env.TTS_PORT         || '9876',
-      TTS_LANG:           env.TTS_LANG         || 'es'
+      TTS_PORT:            env.TTS_PORT            || '9876',
+      TTS_LANG:            env.TTS_LANG            || 'es',
+      DISCOVERY_INTERVAL:  env.DISCOVERY_INTERVAL  || '300000'
     },
     error_file:      './logs/error.log',
     out_file:        './logs/output.log',
