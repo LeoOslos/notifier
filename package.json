@@ -1,0 +1,13 @@
+{
+  "name": "notifier",
+  "version": "1.0.0",
+  "description": "Servicio centralizado de notificaciones con cola persistente SQLite",
+  "main": "notifier.js",
+  "scripts": {
+    "start": "node notifier.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^9.6.0"
+  }
+}
