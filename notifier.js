@@ -148,33 +148,12 @@ function generateTts(message) {
 }
 
 function castToDevice(deviceIp, audioUrl) {
-  const { Client, DefaultMediaReceiver } = require('castv2-client');
+  const { exec } = require('child_process');
   return new Promise((resolve, reject) => {
-    const client = new Client();
-    const timer  = setTimeout(() => {
-      client.close();
-      reject(new Error(`timeout conectando a ${deviceIp}`));
-    }, 15000);
-
-    client.connect(deviceIp, () => {
-      client.launch(DefaultMediaReceiver, (err, player) => {
-        if (err) { clearTimeout(timer); client.close(); return reject(err); }
-        player.load(
-          { contentId: audioUrl, contentType: 'audio/mpeg', streamType: 'BUFFERED' },
-          { autoplay: true },
-          (err) => {
-            if (err) { clearTimeout(timer); client.close(); return reject(err); }
-            player.on('status', (s) => {
-              if (s.playerState === 'IDLE') {
-                clearTimeout(timer); client.close(); resolve();
-              }
-            });
-          }
-        );
-      });
+    exec(`catt -d ${deviceIp} cast "${audioUrl}"`, { timeout: 30000 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr.trim() || err.message));
+      else resolve();
     });
-
-    client.on('error', (err) => { clearTimeout(timer); reject(err); });
   });
 }
 
