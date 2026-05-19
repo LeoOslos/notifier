@@ -16,7 +16,6 @@ const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
 const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
 const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
 const TTS_LANG         = process.env.TTS_LANG               || 'es';
-const DISCOVERY_INTERVAL = parseInt(process.env.DISCOVERY_INTERVAL || '300000'); // 5 min
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 function log(msg) {
@@ -74,7 +73,14 @@ function sendTelegram(message) {
 
 // ── TTS HTTP server ───────────────────────────────────────────────────────────
 function getLocalIp() {
-  for (const ifaces of Object.values(os.networkInterfaces())) {
+  const nets = os.networkInterfaces();
+  // Preferir interfaz WiFi (wlo1) — los Cast devices están en WiFi y solo alcanzan esa IP
+  for (const name of ['wlo1', 'wlan0', 'wlp2s0']) {
+    const iface = (nets[name] || []).find(i => i.family === 'IPv4' && !i.internal);
+    if (iface) return iface.address;
+  }
+  // Fallback: primera IP no-loopback
+  for (const ifaces of Object.values(nets)) {
     for (const iface of ifaces) {
       if (iface.family === 'IPv4' && !iface.internal) return iface.address;
     }
@@ -90,49 +96,14 @@ function startTtsServer() {
     }
     const filepath = path.join(os.tmpdir(), filename);
     if (!fs.existsSync(filepath)) { res.writeHead(404); res.end(); return; }
-    res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+    const size = fs.statSync(filepath).size;
+    res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': size });
     fs.createReadStream(filepath).pipe(res);
   });
   server.listen(TTS_PORT, () => log(`TTS server en :${TTS_PORT}`));
   return server;
 }
 
-// ── mDNS discovery ────────────────────────────────────────────────────────────
-let discoveredDevices = []; // [{ name, ip }]
-let scanning = false;
-
-function discoverDevices() {
-  if (scanning) return;
-  scanning = true;
-
-  const { Bonjour } = require('bonjour-service');
-  const bonjour = new Bonjour();
-  const found   = [];
-
-  const browser = bonjour.find({ type: 'googlecast' }, (service) => {
-    const ip = (service.addresses || []).find(a => /^\d+\.\d+\.\d+\.\d+$/.test(a));
-    if (ip && !found.some(d => d.ip === ip)) {
-      found.push({ name: service.name, ip });
-    }
-  });
-
-  setTimeout(() => {
-    browser.stop();
-    bonjour.destroy();
-    scanning = false;
-    if (found.length) {
-      discoveredDevices = found;
-      log(`Google Home: ${found.map(d => `${d.name}(${d.ip})`).join(', ')}`);
-    } else {
-      log('Google Home: ningún dispositivo encontrado por mDNS');
-    }
-  }, 5000);
-}
-
-function startDiscovery() {
-  discoverDevices();
-  setInterval(discoverDevices, DISCOVERY_INTERVAL);
-}
 
 // ── Google Home ───────────────────────────────────────────────────────────────
 function generateTts(message) {
@@ -147,35 +118,21 @@ function generateTts(message) {
   });
 }
 
-function castToDevice(deviceIp, audioUrl) {
-  const { exec } = require('child_process');
-  return new Promise((resolve, reject) => {
-    exec(`catt -d ${deviceIp} cast "${audioUrl}"`, { timeout: 30000 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr.trim() || err.message));
-      else resolve();
-    });
-  });
-}
-
 async function sendGoogleHome(message) {
-  if (!discoveredDevices.length) throw new Error('No hay dispositivos Google Home descubiertos');
-
+  const { exec } = require('child_process');
   const localIp                = getLocalIp();
   const { filename, filepath } = await generateTts(message);
   const audioUrl               = `http://${localIp}:${TTS_PORT}/${filename}`;
   log(`TTS url: ${audioUrl}`);
 
-  const results = await Promise.allSettled(
-    discoveredDevices.map(d => castToDevice(d.ip, audioUrl))
-  );
-
-  const failures = results.filter(r => r.status === 'rejected');
-  if (failures.length) {
-    log(`${failures.length} dispositivo(s) fallaron, redescubriendo...`);
-    discoverDevices();
-    if (failures.length === discoveredDevices.length)
-      throw new Error(failures.map(f => f.reason.message).join('; '));
-  }
+  const scriptPath = path.join(__dirname, 'cast_google_home.py');
+  await new Promise((resolve, reject) => {
+    exec(`python3 "${scriptPath}" "${audioUrl}"`, { timeout: 60000 }, (err, stdout, stderr) => {
+      if (stdout) stdout.trim().split('\n').forEach(l => log(`cast: ${l}`));
+      if (err) reject(new Error(stderr.trim() || err.message));
+      else resolve();
+    });
+  });
 
   setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 30000);
 }
@@ -213,8 +170,7 @@ function main() {
 
   const db = initDb();
   startTtsServer();
-  startDiscovery();
-  log(`iniciado | db=${DB_PATH} | poll=${POLL_INTERVAL}ms | max_retries=${MAX_RETRIES}`);
+  log(`iniciado | db=${DB_PATH} | poll=${POLL_INTERVAL}ms | max_retries=${MAX_RETRIES} | tts_ip=${getLocalIp()}`);
 
   let busy = false;
   setInterval(async () => {
