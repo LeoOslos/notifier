@@ -21,13 +21,15 @@ const DND_END          = process.env.DND_END   !== undefined ? parseInt(process.
 const DND_CHANNELS     = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
 
 // ── Do Not Disturb ────────────────────────────────────────────────────────────
-function isInDnd(channel) {
-  if (!DND_CHANNELS.includes(channel)) return false;
-  const hour  = new Date().getHours();
-  // Cubre overnight (ej. 23-8) y mismo día (ej. 13-15)
+function isDndTime() {
+  const hour = new Date().getHours();
   return DND_START > DND_END
     ? hour >= DND_START || hour < DND_END
     : hour >= DND_START && hour < DND_END;
+}
+
+function isInDnd(channel) {
+  return DND_CHANNELS.includes(channel) && isDndTime();
 }
 
 // ── Logging ───────────────────────────────────────────────────────────────────
@@ -45,6 +47,7 @@ function initDb() {
       channel    TEXT    NOT NULL DEFAULT 'telegram',
       message    TEXT    NOT NULL,
       priority   INTEGER NOT NULL DEFAULT 5,
+      silent     INTEGER NOT NULL DEFAULT 1,
       status     TEXT    NOT NULL DEFAULT 'pending',
       retries    INTEGER NOT NULL DEFAULT 0,
       created_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -52,16 +55,19 @@ function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_pending ON queue(status, priority, created_at);
   `);
+  // Migración: agregar columna silent si no existe (DBs creadas antes de esta versión)
+  try { db.exec(`ALTER TABLE queue ADD COLUMN silent INTEGER NOT NULL DEFAULT 1`); } catch (_) {}
   return db;
 }
 
 // ── Telegram ──────────────────────────────────────────────────────────────────
-function sendTelegram(message) {
+function sendTelegram(message, silent = true) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      chat_id:    TELEGRAM_CHAT_ID,
-      text:       message.slice(0, 4096),
-      parse_mode: 'HTML'
+      chat_id:              TELEGRAM_CHAT_ID,
+      text:                 message.slice(0, 4096),
+      parse_mode:           'HTML',
+      disable_notification: silent
     });
     const req = https.request({
       hostname: 'api.telegram.org',
@@ -165,10 +171,14 @@ async function processBatch(db) {
       continue;
     }
     try {
-      if (row.channel === 'telegram')    await sendTelegram(row.message);
+      if (row.channel === 'telegram') {
+        // silent=1 por defecto. silent=0 con sonido, pero si es DND → forzar silencioso
+        const silent = row.silent || isDndTime();
+        await sendTelegram(row.message, !!silent);
+      }
       if (row.channel === 'google_home') await sendGoogleHome(row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
-      log(`sent id=${row.id} channel=${row.channel}`);
+      log(`sent id=${row.id} channel=${row.channel} silent=${row.silent}`);
     } catch (err) {
       const retries   = row.retries + 1;
       const newStatus = retries >= MAX_RETRIES ? 'failed' : 'pending';
