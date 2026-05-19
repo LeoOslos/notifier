@@ -82,6 +82,13 @@ node enqueue.js "mensaje" telegram 1 0           # telegram, prioridad 1, con so
 node enqueue.js "mensaje" google_home            # Google Home
 ```
 
+## Formato de los mensajes entregados
+
+El timestamp se agrega automáticamente al momento de enviar, reflejando cuándo ocurrió el evento (no cuándo se entregó — puede diferir si hubo DND).
+
+- **Telegram:** `[18/05 22:08] El script terminó`
+- **Google Home:** `A las 22:08, El script terminó`
+
 ---
 
 ## Canales
