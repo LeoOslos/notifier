@@ -16,9 +16,10 @@ const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
 const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
 const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
 const TTS_LANG         = process.env.TTS_LANG               || 'es';
-const DND_START        = process.env.DND_START !== undefined ? parseInt(process.env.DND_START) : 23;
-const DND_END          = process.env.DND_END   !== undefined ? parseInt(process.env.DND_END)   : 8;
-const DND_CHANNELS     = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
+const DND_START            = process.env.DND_START !== undefined ? parseInt(process.env.DND_START) : 23;
+const DND_END              = process.env.DND_END   !== undefined ? parseInt(process.env.DND_END)   : 8;
+const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
+const QUEUE_RETENTION_DAYS = parseInt(process.env.QUEUE_RETENTION_DAYS || '30');
 
 // ── Do Not Disturb ────────────────────────────────────────────────────────────
 function isDndTime() {
@@ -167,6 +168,16 @@ async function sendGoogleHome(message) {
   setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 30000);
 }
 
+// ── Queue cleanup ─────────────────────────────────────────────────────────────
+function purgeOldRecords(db) {
+  const { changes } = db.prepare(`
+    DELETE FROM queue
+    WHERE status IN ('sent', 'failed', 'skipped')
+      AND created_at < datetime('now', ? || ' days')
+  `).run(`-${QUEUE_RETENTION_DAYS}`);
+  if (changes > 0) log(`purge: eliminados ${changes} registros con más de ${QUEUE_RETENTION_DAYS} días`);
+}
+
 // ── Process batch ─────────────────────────────────────────────────────────────
 async function processBatch(db) {
   const rows = db.prepare(`
@@ -178,7 +189,8 @@ async function processBatch(db) {
 
   for (const row of rows) {
     if (isInDnd(row.channel)) {
-      log(`dnd: omitiendo id=${row.id} channel=${row.channel} (DND ${DND_START}-${DND_END}h)`);
+      db.prepare(`UPDATE queue SET status='skipped', sent_at=datetime('now') WHERE id=?`).run(row.id);
+      log(`dnd: skipped id=${row.id} channel=${row.channel} (DND ${DND_START}-${DND_END}h)`);
       continue;
     }
     try {
@@ -208,7 +220,10 @@ function main() {
 
   const db = initDb();
   startTtsServer();
-  log(`iniciado | db=${DB_PATH} | poll=${POLL_INTERVAL}ms | max_retries=${MAX_RETRIES} | tts_ip=${getLocalIp()}`);
+  log(`iniciado | db=${DB_PATH} | poll=${POLL_INTERVAL}ms | max_retries=${MAX_RETRIES} | tts_ip=${getLocalIp()} | retention=${QUEUE_RETENTION_DAYS}d`);
+
+  purgeOldRecords(db);
+  setInterval(() => purgeOldRecords(db), 60 * 60 * 1000);
 
   let busy = false;
   setInterval(async () => {

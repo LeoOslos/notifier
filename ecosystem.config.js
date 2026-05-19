@@ -30,7 +30,8 @@ module.exports = {
       TTS_LANG:     env.TTS_LANG     || 'es',
       DND_START:    env.DND_START    || '23',
       DND_END:      env.DND_END      || '8',
-      DND_CHANNELS: env.DND_CHANNELS || 'google_home'
+      DND_CHANNELS:         env.DND_CHANNELS         || 'google_home',
+      QUEUE_RETENTION_DAYS: env.QUEUE_RETENTION_DAYS || '30'
     },
     error_file:      './logs/error.log',
     out_file:        './logs/output.log',
