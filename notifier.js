@@ -32,6 +32,17 @@ function isInDnd(channel) {
   return DND_CHANNELS.includes(channel) && isDndTime();
 }
 
+// ── Timestamp ────────────────────────────────────────────────────────────────
+function fmtTime(createdAt) {
+  // created_at viene en UTC de SQLite datetime('now') → convertir a hora local
+  const d  = new Date(createdAt.replace(' ', 'T') + 'Z');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mo} ${hh}:${mm}`;
+}
+
 // ── Logging ───────────────────────────────────────────────────────────────────
 function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
@@ -171,12 +182,12 @@ async function processBatch(db) {
       continue;
     }
     try {
+      const ts = fmtTime(row.created_at);
       if (row.channel === 'telegram') {
-        // silent=1 por defecto. silent=0 con sonido, pero si es DND → forzar silencioso
         const silent = row.silent || isDndTime();
-        await sendTelegram(row.message, !!silent);
+        await sendTelegram(`[${ts}] ${row.message}`, !!silent);
       }
-      if (row.channel === 'google_home') await sendGoogleHome(row.message);
+      if (row.channel === 'google_home') await sendGoogleHome(`A las ${ts.slice(6)}, ${row.message}`);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel} silent=${row.silent}`);
     } catch (err) {
