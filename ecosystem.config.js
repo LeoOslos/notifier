@@ -27,7 +27,7 @@ module.exports = {
       MAX_RETRIES:        env.MAX_RETRIES      || '3',
       BATCH_SIZE:         env.BATCH_SIZE       || '10',
       TTS_PORT:     env.TTS_PORT     || '9876',
-      TTS_LANG:     env.TTS_LANG     || 'es',
+      TTS_VOICE:    env.TTS_VOICE    || 'es-AR-TomasNeural',
       DND_START:    env.DND_START    || '23',
       DND_END:      env.DND_END      || '8',
       DND_CHANNELS:         env.DND_CHANNELS         || 'google_home',

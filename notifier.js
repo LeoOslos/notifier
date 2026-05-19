@@ -15,7 +15,7 @@ const POLL_INTERVAL    = parseInt(process.env.POLL_INTERVAL || '2000');
 const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
 const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
 const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
-const TTS_LANG         = process.env.TTS_LANG               || 'es';
+const TTS_VOICE        = process.env.TTS_VOICE              || 'es-AR-TomasNeural';
 const DND_START            = process.env.DND_START !== undefined ? parseInt(process.env.DND_START) : 23;
 const DND_END              = process.env.DND_END   !== undefined ? parseInt(process.env.DND_END)   : 8;
 const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
@@ -138,11 +138,12 @@ function startTtsServer() {
 
 // ── Google Home ───────────────────────────────────────────────────────────────
 function generateTts(message) {
-  const gtts     = require('node-gtts')(TTS_LANG);
+  const { exec } = require('child_process');
   const filename = `notifier_tts_${Date.now()}.mp3`;
   const filepath = path.join(os.tmpdir(), filename);
   return new Promise((resolve, reject) => {
-    gtts.save(filepath, message, (err) => {
+    const cmd = `edge-tts --voice "${TTS_VOICE}" --text "${message.replace(/"/g, '\\"')}" --write-media "${filepath}"`;
+    exec(cmd, { timeout: 15000 }, (err) => {
       if (err) reject(err);
       else resolve({ filename, filepath });
     });
