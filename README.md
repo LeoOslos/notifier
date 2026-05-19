@@ -110,7 +110,17 @@ El timestamp se agrega automáticamente al momento de enviar, reflejando cuándo
 | Situación | google_home | telegram silent=1 | telegram silent=0 |
 |-----------|-------------|-------------------|-------------------|
 | Fuera de DND | envía | silencioso | con sonido |
-| En DND (23-8h) | pending | silencioso | silencioso |
+| En DND (23-8h) | **skipped** | silencioso | silencioso |
+
+`google_home` en DND se marca `skipped` inmediatamente — no se entrega nunca, queda como evidencia en la cola. No hay catarata de mensajes al salir del DND.
+
+## Depuración de la cola
+
+Los registros con status `sent`, `failed` o `skipped` se eliminan automáticamente al arrancar el servicio y cada hora. Retención configurable en `.env`:
+
+```env
+QUEUE_RETENTION_DAYS=30
+```
 
 ---
 
