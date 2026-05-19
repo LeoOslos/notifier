@@ -32,7 +32,7 @@ pm2 save
 
 ### Requisitos Python (Google Home)
 ```bash
-pip install pychromecast gtts
+pip install pychromecast edge-tts
 sudo ufw allow 9876/tcp   # el Mini necesita descargar el MP3 desde esta máquina
 ```
 
@@ -51,13 +51,13 @@ DND_CHANNELS=google_home  # canales bloqueados (separados por coma)
 
 # Opcionales
 TTS_PORT=9876
-TTS_LANG=es
+TTS_VOICE=es-AR-TomasNeural   # voz TTS (edge-tts). Alternativa: es-AR-ElenaNeural
 POLL_INTERVAL=2000
 MAX_RETRIES=3
 BATCH_SIZE=10
 ```
 
-Después de editar `.env`: `pm2 restart notifier --update-env`
+Después de editar `.env`: `pm2 restart ecosystem.config.js --update-env`
 
 ---
 
@@ -99,9 +99,14 @@ El timestamp se agrega automáticamente al momento de enviar, reflejando cuándo
 - `silent=0`: envía con sonido, excepto si está en horario DND → fuerza silencioso.
 
 ### google_home
-- Genera TTS con gTTS, sirve el MP3 por HTTP desde `wlo1` (IP WiFi: 192.168.0.100).
+- Genera TTS con **edge-tts** (voz `es-AR-TomasNeural` por defecto — natural, argentina).
+- Sirve el MP3 por HTTP desde `wlo1` (IP WiFi: 192.168.0.100), puerto 9876.
 - Usa pychromecast para castear a todos los dispositivos descubiertos en la red.
-- Bloqueado en horario DND: los mensajes quedan `pending` y se procesan al salir del horario.
+- En DND: se marca `skipped` inmediatamente, nunca se entrega.
+
+**Voces disponibles en español argentino:**
+- `es-AR-TomasNeural` — masculina ✓ (default)
+- `es-AR-ElenaNeural` — femenina
 
 ---
 
@@ -179,7 +184,7 @@ pm2 logs notifier --lines 50
 
 Entradas relevantes:
 - `sent id=N channel=X silent=Y` — mensaje enviado
-- `dnd: omitiendo id=N` — en horario DND, se reintentará
+- `dnd: skipped id=N` — en horario DND, descartado (no se reintenta)
 - `cast: ok NombreDispositivo` — Cast exitoso
 - `cast: error NombreDispositivo: ...` — falló ese dispositivo (otros pueden haber funcionado)
 - `error id=N retries=M status=failed` — agotó reintentos
