@@ -16,6 +16,19 @@ const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
 const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
 const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
 const TTS_LANG         = process.env.TTS_LANG               || 'es';
+const DND_START        = process.env.DND_START !== undefined ? parseInt(process.env.DND_START) : 23;
+const DND_END          = process.env.DND_END   !== undefined ? parseInt(process.env.DND_END)   : 8;
+const DND_CHANNELS     = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
+
+// ── Do Not Disturb ────────────────────────────────────────────────────────────
+function isInDnd(channel) {
+  if (!DND_CHANNELS.includes(channel)) return false;
+  const hour  = new Date().getHours();
+  // Cubre overnight (ej. 23-8) y mismo día (ej. 13-15)
+  return DND_START > DND_END
+    ? hour >= DND_START || hour < DND_END
+    : hour >= DND_START && hour < DND_END;
+}
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 function log(msg) {
@@ -147,6 +160,10 @@ async function processBatch(db) {
   `).all(MAX_RETRIES, BATCH_SIZE);
 
   for (const row of rows) {
+    if (isInDnd(row.channel)) {
+      log(`dnd: omitiendo id=${row.id} channel=${row.channel} (DND ${DND_START}-${DND_END}h)`);
+      continue;
+    }
     try {
       if (row.channel === 'telegram')    await sendTelegram(row.message);
       if (row.channel === 'google_home') await sendGoogleHome(row.message);

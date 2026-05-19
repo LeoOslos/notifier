@@ -26,9 +26,11 @@ module.exports = {
       POLL_INTERVAL:      env.POLL_INTERVAL    || '2000',
       MAX_RETRIES:        env.MAX_RETRIES      || '3',
       BATCH_SIZE:         env.BATCH_SIZE       || '10',
-      TTS_PORT:            env.TTS_PORT            || '9876',
-      TTS_LANG:            env.TTS_LANG            || 'es',
-      DISCOVERY_INTERVAL:  env.DISCOVERY_INTERVAL  || '300000'
+      TTS_PORT:     env.TTS_PORT     || '9876',
+      TTS_LANG:     env.TTS_LANG     || 'es',
+      DND_START:    env.DND_START    || '23',
+      DND_END:      env.DND_END      || '8',
+      DND_CHANNELS: env.DND_CHANNELS || 'google_home'
     },
     error_file:      './logs/error.log',
     out_file:        './logs/output.log',
