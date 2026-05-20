@@ -16,17 +16,24 @@ const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
 const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
 const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
 const TTS_VOICE        = process.env.TTS_VOICE              || 'es-AR-TomasNeural';
-const DND_START            = process.env.DND_START !== undefined ? parseInt(process.env.DND_START) : 23;
-const DND_END              = process.env.DND_END   !== undefined ? parseInt(process.env.DND_END)   : 8;
 const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
 const QUEUE_RETENTION_DAYS = parseInt(process.env.QUEUE_RETENTION_DAYS || '30');
 
+function parseHHMM(val, defaultHour) {
+  if (val === undefined) return defaultHour * 60;
+  const parts = val.split(':');
+  return parseInt(parts[0]) * 60 + (parts[1] ? parseInt(parts[1]) : 0);
+}
+const DND_START = parseHHMM(process.env.DND_START, 23);
+const DND_END   = parseHHMM(process.env.DND_END,   8);
+
 // ── Do Not Disturb ────────────────────────────────────────────────────────────
 function isDndTime() {
-  const hour = new Date().getHours();
+  const now = new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
   return DND_START > DND_END
-    ? hour >= DND_START || hour < DND_END
-    : hour >= DND_START && hour < DND_END;
+    ? minutes >= DND_START || minutes < DND_END
+    : minutes >= DND_START && minutes < DND_END;
 }
 
 function isInDnd(channel) {
