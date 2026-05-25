@@ -47,7 +47,7 @@ TELEGRAM_CHAT_ID=...
 # Do Not Disturb
 DND_START=23          # hora de inicio (formato 24h)
 DND_END=8             # hora de fin
-DND_CHANNELS=google_home  # canales bloqueados (separados por coma)
+DND_CHANNELS=google_home,lights  # canales bloqueados (separados por coma)
 
 # Opcionales
 TTS_PORT=9876
@@ -56,6 +56,10 @@ GOOGLE_HOME_DEVICE=Mini       # substring del nombre del dispositivo. Vacío = t
 POLL_INTERVAL=2000
 MAX_RETRIES=3
 BATCH_SIZE=10
+
+# Home Assistant (canal lights)
+HA_URL=http://localhost:8123
+HA_TOKEN=...
 ```
 
 Después de editar `.env`: `pm2 restart ecosystem.config.js --update-env`
@@ -93,6 +97,32 @@ El timestamp se agrega automáticamente al momento de enviar, reflejando cuándo
 ---
 
 ## Canales
+
+### lights
+
+Notificaciones visuales via luces LIFX a través de la API de Home Assistant. No convierte el mensaje en texto — solo usa el canal y la prioridad.
+
+**Modos según prioridad:**
+
+| Prioridad | Modo | Efecto |
+|-----------|------|--------|
+| 1 | `alert` | 3 blinks rojos, 50% brillo, 0.3s — algo urgente |
+| 2–4 | `pulse` | Breathe rojo suave, 25% brillo, 0.35s — notificación normal |
+| 5+ | `info` | Breathe azul, 15% brillo, 1.2s — bajo impacto |
+
+La prioridad controla tanto el **orden de despacho** (menor número = sale antes) como el **efecto visual**. Dentro de cada rango, todos los valores producen el mismo efecto.
+
+Aplica a todas las luces LIFX de la casa:
+- Luces con soporte de color: cambian al color del modo
+- Luces solo blancas (`bathroom_lamp`, `shelf_lamp`): pulsan en brillo sin cambio de color
+
+En DND: se skipea igual que `google_home`.
+
+**Configuración requerida en `.env`:**
+```env
+HA_URL=http://localhost:8123
+HA_TOKEN=<long-lived access token de Home Assistant>
+```
 
 ### telegram
 - Siempre envía, nunca bloqueado por DND.
