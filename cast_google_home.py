@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """
-Castea un archivo MP3 a todos los dispositivos Google Home descubiertos en la red.
-Uso: cast_google_home.py <url_audio>
+Castea un archivo MP3 a dispositivos Google Home descubiertos en la red.
+Uso: cast_google_home.py <url_audio> [nombre_dispositivo]
+  nombre_dispositivo: substring case-insensitive (ej: "Mini"). Omitir = todos.
 """
 import sys
 import time
 import pychromecast
 
-def cast_all(audio_url: str) -> list[str]:
+def cast_to(audio_url: str, device_filter: str = "") -> list[str]:
     chromecasts, browser = pychromecast.get_chromecasts()
     if not chromecasts:
         pychromecast.discovery.stop_discovery(browser)
         raise RuntimeError("No se encontraron dispositivos Cast en la red")
 
-    names = [c.cast_info.friendly_name for c in chromecasts]
-    errors = []
+    if device_filter:
+        targets = [c for c in chromecasts if device_filter.lower() in c.cast_info.friendly_name.lower()]
+        if not targets:
+            names = [c.cast_info.friendly_name for c in chromecasts]
+            pychromecast.discovery.stop_discovery(browser)
+            raise RuntimeError(f"Ningún dispositivo coincide con '{device_filter}'. Disponibles: {names}")
+    else:
+        targets = chromecasts
 
-    for cast in chromecasts:
+    errors = []
+    for cast in targets:
         name = cast.cast_info.friendly_name
         try:
             cast.wait(timeout=10)
@@ -33,18 +41,21 @@ def cast_all(audio_url: str) -> list[str]:
 
     pychromecast.discovery.stop_discovery(browser)
 
-    if errors and len(errors) == len(chromecasts):
+    if errors and len(errors) == len(targets):
         raise RuntimeError("; ".join(errors))
 
-    return names
+    return [c.cast_info.friendly_name for c in targets]
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: cast_google_home.py <url_audio>", file=sys.stderr)
+        print("Uso: cast_google_home.py <url_audio> [nombre_dispositivo]", file=sys.stderr)
         sys.exit(1)
 
+    audio_url     = sys.argv[1]
+    device_filter = sys.argv[2] if len(sys.argv) > 2 else ""
+
     try:
-        devices = cast_all(sys.argv[1])
+        cast_to(audio_url, device_filter)
         sys.exit(0)
     except Exception as e:
         print(f"fatal: {e}", file=sys.stderr)

@@ -18,6 +18,7 @@ const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
 const TTS_VOICE        = process.env.TTS_VOICE              || 'es-AR-TomasNeural';
 const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
 const QUEUE_RETENTION_DAYS = parseInt(process.env.QUEUE_RETENTION_DAYS || '30');
+const GOOGLE_HOME_DEVICE   = process.env.GOOGLE_HOME_DEVICE || '';
 
 function parseHHMM(val, defaultHour) {
   if (val === undefined) return defaultHour * 60;
@@ -164,9 +165,10 @@ async function sendGoogleHome(message) {
   const audioUrl               = `http://${localIp}:${TTS_PORT}/${filename}`;
   log(`TTS url: ${audioUrl}`);
 
-  const scriptPath = path.join(__dirname, 'cast_google_home.py');
+  const scriptPath   = path.join(__dirname, 'cast_google_home.py');
+  const deviceArg    = GOOGLE_HOME_DEVICE ? ` "${GOOGLE_HOME_DEVICE}"` : '';
   await new Promise((resolve, reject) => {
-    exec(`python3 "${scriptPath}" "${audioUrl}"`, { timeout: 60000 }, (err, stdout, stderr) => {
+    exec(`python3 "${scriptPath}" "${audioUrl}"${deviceArg}`, { timeout: 60000 }, (err, stdout, stderr) => {
       if (stdout) stdout.trim().split('\n').forEach(l => log(`cast: ${l}`));
       if (err) reject(new Error(stderr.trim() || err.message));
       else resolve();
@@ -207,7 +209,7 @@ async function processBatch(db) {
         const silent = row.silent || isDndTime();
         await sendTelegram(`[${ts}] ${row.message}`, !!silent);
       }
-      if (row.channel === 'google_home') await sendGoogleHome(`A las ${ts.slice(6)}, ${row.message}`);
+      if (row.channel === 'google_home') await sendGoogleHome(row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel} silent=${row.silent}`);
     } catch (err) {
