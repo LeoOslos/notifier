@@ -52,6 +52,7 @@ DND_CHANNELS=google_home  # canales bloqueados (separados por coma)
 # Opcionales
 TTS_PORT=9876
 TTS_VOICE=es-AR-TomasNeural   # voz TTS (edge-tts). Alternativa: es-AR-ElenaNeural
+GOOGLE_HOME_DEVICE=Mini       # substring del nombre del dispositivo. Vacío = todos.
 POLL_INTERVAL=2000
 MAX_RETRIES=3
 BATCH_SIZE=10
@@ -87,7 +88,7 @@ node enqueue.js "mensaje" google_home            # Google Home
 El timestamp se agrega automáticamente al momento de enviar, reflejando cuándo ocurrió el evento (no cuándo se entregó — puede diferir si hubo DND).
 
 - **Telegram:** `[18/05 22:08] El script terminó`
-- **Google Home:** `A las 22:08, El script terminó`
+- **Google Home:** el mensaje se entrega tal cual, sin prefijo de hora.
 
 ---
 
@@ -101,7 +102,7 @@ El timestamp se agrega automáticamente al momento de enviar, reflejando cuándo
 ### google_home
 - Genera TTS con **edge-tts** (voz `es-AR-TomasNeural` por defecto — natural, argentina).
 - Sirve el MP3 por HTTP desde `wlo1` (IP WiFi: 192.168.0.100), puerto 9876.
-- Usa pychromecast para castear a todos los dispositivos descubiertos en la red.
+- Castea al dispositivo cuyo nombre contenga `GOOGLE_HOME_DEVICE` (substring, case-insensitive). Si está vacío, castea a todos.
 - En DND: se marca `skipped` inmediatamente, nunca se entrega.
 
 **Voces disponibles en español argentino:**
