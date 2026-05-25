@@ -19,6 +19,8 @@ const TTS_VOICE        = process.env.TTS_VOICE              || 'es-AR-TomasNeura
 const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
 const QUEUE_RETENTION_DAYS = parseInt(process.env.QUEUE_RETENTION_DAYS || '30');
 const GOOGLE_HOME_DEVICE   = process.env.GOOGLE_HOME_DEVICE || '';
+const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
+const HA_TOKEN             = process.env.HA_TOKEN           || '';
 
 function parseHHMM(val, defaultHour) {
   if (val === undefined) return defaultHour * 60;
@@ -158,6 +160,19 @@ function generateTts(message) {
   });
 }
 
+async function sendLights(priority) {
+  const { exec } = require('child_process');
+  const scriptPath = path.join(__dirname, 'cast_lights.py');
+  await new Promise((resolve, reject) => {
+    const env = { ...process.env, HA_URL, HA_TOKEN };
+    exec(`python3 "${scriptPath}" "${priority}"`, { timeout: 15000, env }, (err, stdout, stderr) => {
+      if (stdout) stdout.trim().split('\n').forEach(l => log(`lights: ${l}`));
+      if (err) reject(new Error(stderr.trim() || err.message));
+      else resolve();
+    });
+  });
+}
+
 async function sendGoogleHome(message) {
   const { exec } = require('child_process');
   const localIp                = getLocalIp();
@@ -210,6 +225,7 @@ async function processBatch(db) {
         await sendTelegram(`[${ts}] ${row.message}`, !!silent);
       }
       if (row.channel === 'google_home') await sendGoogleHome(row.message);
+      if (row.channel === 'lights')      await sendLights(row.priority);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel} silent=${row.silent}`);
     } catch (err) {

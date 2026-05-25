@@ -32,7 +32,9 @@ module.exports = {
       DND_END:      env.DND_END      || '8',
       DND_CHANNELS:         env.DND_CHANNELS         || 'google_home',
       QUEUE_RETENTION_DAYS: env.QUEUE_RETENTION_DAYS || '30',
-      GOOGLE_HOME_DEVICE:   env.GOOGLE_HOME_DEVICE   || ''
+      GOOGLE_HOME_DEVICE:   env.GOOGLE_HOME_DEVICE   || '',
+      HA_URL:               env.HA_URL               || 'http://localhost:8123',
+      HA_TOKEN:             env.HA_TOKEN             || ''
     },
     error_file:      './logs/error.log',
     out_file:        './logs/output.log',
