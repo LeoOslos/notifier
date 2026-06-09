@@ -70,6 +70,7 @@ function initDb() {
       message    TEXT    NOT NULL,
       priority   INTEGER NOT NULL DEFAULT 5,
       silent     INTEGER NOT NULL DEFAULT 1,
+      analyze    INTEGER NOT NULL DEFAULT 0,
       status     TEXT    NOT NULL DEFAULT 'pending',
       retries    INTEGER NOT NULL DEFAULT 0,
       created_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -77,8 +78,9 @@ function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_pending ON queue(status, priority, created_at);
   `);
-  // Migración: agregar columna silent si no existe (DBs creadas antes de esta versión)
+  // Migración: agregar columnas si no existen (DBs creadas antes de cada versión)
   try { db.exec(`ALTER TABLE queue ADD COLUMN silent INTEGER NOT NULL DEFAULT 1`); } catch (_) {}
+  try { db.exec(`ALTER TABLE queue ADD COLUMN analyze INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
   return db;
 }
 
