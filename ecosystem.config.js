@@ -34,7 +34,8 @@ module.exports = {
       QUEUE_RETENTION_DAYS: env.QUEUE_RETENTION_DAYS || '30',
       GOOGLE_HOME_DEVICE:   env.GOOGLE_HOME_DEVICE   || '',
       HA_URL:               env.HA_URL               || 'http://localhost:8123',
-      HA_TOKEN:             env.HA_TOKEN             || ''
+      HA_TOKEN:             env.HA_TOKEN             || '',
+      ANALYZE_HOOK_CMD:     env.ANALYZE_HOOK_CMD     || ''
     },
     error_file:      './logs/error.log',
     out_file:        './logs/output.log',

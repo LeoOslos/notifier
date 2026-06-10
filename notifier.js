@@ -21,6 +21,9 @@ const QUEUE_RETENTION_DAYS = parseInt(process.env.QUEUE_RETENTION_DAYS || '30');
 const GOOGLE_HOME_DEVICE   = process.env.GOOGLE_HOME_DEVICE || '';
 const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
 const HA_TOKEN             = process.env.HA_TOKEN           || '';
+// Hook coreográfico: comando opaco a ejecutar cuando una fila analyze=1 pasa a 'sent'.
+// Default vacío = no-op. notifier no sabe qué hay del otro lado (ver analyzer agent).
+const ANALYZE_HOOK_CMD     = process.env.ANALYZE_HOOK_CMD   || '';
 
 function parseHHMM(val, defaultHour) {
   if (val === undefined) return defaultHour * 60;
@@ -205,6 +208,18 @@ function purgeOldRecords(db) {
   if (changes > 0) log(`purge: eliminados ${changes} registros con más de ${QUEUE_RETENTION_DAYS} días`);
 }
 
+// ── Analyze hook (coreografía event-driven) ───────────────────────────────────
+function fireAnalyzeHook(id) {
+  if (!ANALYZE_HOOK_CMD) return;
+  const { execFile } = require('child_process');
+  // fire-and-forget: no bloquea el dispatch. El launcher serializa (flock) y
+  // corre el analyzer en su propio proceso.
+  execFile(ANALYZE_HOOK_CMD, [String(id)], { timeout: 0 }, (err) => {
+    if (err) log(`analyze-hook id=${id} error: ${err.message}`);
+    else     log(`analyze-hook id=${id} ejecutado`);
+  });
+}
+
 // ── Process batch ─────────────────────────────────────────────────────────────
 async function processBatch(db) {
   const rows = db.prepare(`
@@ -230,6 +245,9 @@ async function processBatch(db) {
       if (row.channel === 'lights')      await sendLights(row.priority);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel} silent=${row.silent}`);
+      // Coreografía: si el evento pide análisis, disparar el hook recién ahora
+      // (status='sent' garantiza que el incidente ya se entregó antes del análisis).
+      if (row.analyze) fireAnalyzeHook(row.id);
     } catch (err) {
       const retries   = row.retries + 1;
       const newStatus = retries >= MAX_RETRIES ? 'failed' : 'pending';
