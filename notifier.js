@@ -74,6 +74,7 @@ function initDb() {
       priority   INTEGER NOT NULL DEFAULT 5,
       silent     INTEGER NOT NULL DEFAULT 1,
       analyze    INTEGER NOT NULL DEFAULT 0,
+      source     TEXT    NOT NULL DEFAULT 'unknown',
       status     TEXT    NOT NULL DEFAULT 'pending',
       retries    INTEGER NOT NULL DEFAULT 0,
       created_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -84,6 +85,7 @@ function initDb() {
   // Migración: agregar columnas si no existen (DBs creadas antes de cada versión)
   try { db.exec(`ALTER TABLE queue ADD COLUMN silent INTEGER NOT NULL DEFAULT 1`); } catch (_) {}
   try { db.exec(`ALTER TABLE queue ADD COLUMN analyze INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
+  try { db.exec(`ALTER TABLE queue ADD COLUMN source TEXT NOT NULL DEFAULT 'unknown'`); } catch (_) {}
   return db;
 }
 

@@ -77,7 +77,12 @@ notify("El script terminó")                              # telegram, silencioso
 notify("Precio en target", silent=False)                 # telegram con sonido (si no es DND)
 notify("Alerta crítica", priority=1)                     # telegram, prioridad alta, silencioso
 notify("Proceso finalizado", channel="google_home")      # habla en todos los parlantes
+notify("HA caído", priority=1, analyze=True, source="chequeo_ha")  # análisis + origen
 ```
+
+El parámetro `source` identifica qué servicio encoló la notificación. No afecta la
+entrega; viaja en la fila para que el **analyzer** sepa el origen del incidente y
+oriente el diagnóstico (ver su catálogo de monitores). Opcional, default `'unknown'`.
 
 ### Desde CLI
 
@@ -85,6 +90,8 @@ notify("Proceso finalizado", channel="google_home")      # habla en todos los pa
 node enqueue.js "mensaje"                        # telegram, silencioso
 node enqueue.js "mensaje" telegram 1 0           # telegram, prioridad 1, con sonido
 node enqueue.js "mensaje" google_home            # Google Home
+# args: "mensaje" [canal] [prioridad] [silent] [analyze] [source]
+node enqueue.js "HA caído" telegram 1 0 1 chequeo_ha   # análisis autónomo + origen
 ```
 
 ## Formato de los mensajes entregados
@@ -169,6 +176,8 @@ CREATE TABLE queue (
   message    TEXT    NOT NULL,
   priority   INTEGER NOT NULL DEFAULT 5,   -- menor número = mayor prioridad
   silent     INTEGER NOT NULL DEFAULT 1,   -- 1=silencioso, 0=con sonido
+  analyze    INTEGER NOT NULL DEFAULT 0,   -- 1=dispara hook de análisis al pasar a 'sent'
+  source     TEXT    NOT NULL DEFAULT 'unknown',  -- qué servicio encoló (contexto p/ analyzer)
   status     TEXT    NOT NULL DEFAULT 'pending',  -- pending | sent | failed
   retries    INTEGER NOT NULL DEFAULT 0,
   created_at TEXT    NOT NULL DEFAULT (datetime('now')),
