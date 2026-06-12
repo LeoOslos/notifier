@@ -159,7 +159,7 @@ function generateTts(message) {
   const filename = `notifier_tts_${Date.now()}.mp3`;
   const filepath = path.join(os.tmpdir(), filename);
   return new Promise((resolve, reject) => {
-    const cmd = `edge-tts --voice "${TTS_VOICE}" --text "${message.replace(/"/g, '\\"')}" --write-media "${filepath}"`;
+    const cmd = `/home/leoadmin/.local/bin/edge-tts --voice "${TTS_VOICE}" --text "${message.replace(/"/g, '\\"')}" --write-media "${filepath}"`;
     exec(cmd, { timeout: 15000 }, (err) => {
       if (err) reject(err);
       else resolve({ filename, filepath });
