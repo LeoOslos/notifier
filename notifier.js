@@ -1,11 +1,12 @@
 'use strict';
 
-const https    = require('https');
-const http     = require('http');
-const path     = require('path');
-const fs       = require('fs');
-const os       = require('os');
-const Database = require('better-sqlite3');
+const https      = require('https');
+const http       = require('http');
+const path       = require('path');
+const fs         = require('fs');
+const os         = require('os');
+const Database   = require('better-sqlite3');
+const nodemailer = require('nodemailer');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const TELEGRAM_TOKEN   = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -24,6 +25,8 @@ const HA_TOKEN             = process.env.HA_TOKEN           || '';
 // Hook coreográfico: comando opaco a ejecutar cuando una fila analyze=1 pasa a 'sent'.
 // Default vacío = no-op. notifier no sabe qué hay del otro lado (ver analyzer agent).
 const ANALYZE_HOOK_CMD     = process.env.ANALYZE_HOOK_CMD   || '';
+const GMAIL_USER           = process.env.GMAIL_USER         || '';
+const GMAIL_APP_PASSWORD   = process.env.GMAIL_APP_PASSWORD || '';
 
 function parseHHMM(val, defaultHour) {
   if (val === undefined) return defaultHour * 60;
@@ -86,6 +89,8 @@ function initDb() {
   try { db.exec(`ALTER TABLE queue ADD COLUMN silent INTEGER NOT NULL DEFAULT 1`); } catch (_) {}
   try { db.exec(`ALTER TABLE queue ADD COLUMN analyze INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
   try { db.exec(`ALTER TABLE queue ADD COLUMN source TEXT NOT NULL DEFAULT 'unknown'`); } catch (_) {}
+  try { db.exec(`ALTER TABLE queue ADD COLUMN email_to TEXT NOT NULL DEFAULT ''`); } catch (_) {}
+  try { db.exec(`ALTER TABLE queue ADD COLUMN email_subject TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   return db;
 }
 
@@ -116,6 +121,30 @@ function sendTelegram(message, silent = true) {
     req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
     req.write(body);
     req.end();
+  });
+}
+
+// ── Email ─────────────────────────────────────────────────────────────────────
+function isValidEmail(addr) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr);
+}
+
+function sendEmail(to, subject, message) {
+  if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
+    return Promise.reject(new Error('Email: faltan GMAIL_USER o GMAIL_APP_PASSWORD en .env'));
+  }
+  if (!isValidEmail(to)) {
+    return Promise.reject(new Error(`Email: dirección inválida: ${to}`));
+  }
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }
+  });
+  return transporter.sendMail({
+    from:    GMAIL_USER,
+    to,
+    subject: subject || '(sin asunto)',
+    text:    message
   });
 }
 
@@ -245,6 +274,7 @@ async function processBatch(db) {
       }
       if (row.channel === 'google_home') await sendGoogleHome(row.message);
       if (row.channel === 'lights')      await sendLights(row.priority);
+      if (row.channel === 'email')       await sendEmail(row.email_to, row.email_subject, row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel} silent=${row.silent}`);
       // Coreografía: si el evento pide análisis, disparar el hook recién ahora

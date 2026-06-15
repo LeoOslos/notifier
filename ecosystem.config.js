@@ -35,7 +35,9 @@ module.exports = {
       GOOGLE_HOME_DEVICE:   env.GOOGLE_HOME_DEVICE   || '',
       HA_URL:               env.HA_URL               || 'http://localhost:8123',
       HA_TOKEN:             env.HA_TOKEN             || '',
-      ANALYZE_HOOK_CMD:     env.ANALYZE_HOOK_CMD     || ''
+      ANALYZE_HOOK_CMD:     env.ANALYZE_HOOK_CMD     || '',
+      GMAIL_USER:           env.GMAIL_USER           || '',
+      GMAIL_APP_PASSWORD:   env.GMAIL_APP_PASSWORD   || ''
     },
     error_file:      './logs/error.log',
     out_file:        './logs/output.log',
