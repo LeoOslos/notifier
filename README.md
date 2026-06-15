@@ -1,6 +1,6 @@
 # Notifier
 
-Servicio centralizado de notificaciones con cola persistente SQLite. Corre como proceso PM2 y soporta dos canales: Telegram y Google Home (TTS por Cast).
+Servicio centralizado de notificaciones con cola persistente SQLite. Corre como proceso PM2 y soporta cuatro canales: Telegram, Google Home (TTS por Cast), Email (Gmail SMTP) y Lights (LIFX via HA).
 
 ## Arquitectura
 
@@ -12,8 +12,10 @@ Script Python / CLI
        │
        ▼
   notifier.js (PM2, poll cada 2s)
-       ├── telegram  → API Bot de Telegram
-       └── google_home → cast_google_home.py → pychromecast → Google Home / Nest Hub / Chromecast
+       ├── telegram    → API Bot de Telegram
+       ├── google_home → cast_google_home.py → pychromecast → Google Home / Nest Hub / Chromecast
+       ├── email       → Gmail SMTP (nodemailer) → casilla destino configurable por mensaje
+       └── lights      → cast_lights.py → Home Assistant API → luces LIFX
 ```
 
 El notifier hace polling a la DB cada 2 segundos. Los mensajes se encolan desde cualquier script y se procesan en orden de prioridad.
@@ -57,6 +59,10 @@ POLL_INTERVAL=2000
 MAX_RETRIES=3
 BATCH_SIZE=10
 
+# Email (canal email)
+GMAIL_USER=cuenta@gmail.com
+GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx   # App Password de Google, no la contraseña normal
+
 # Home Assistant (canal lights)
 HA_URL=http://localhost:8123
 HA_TOKEN=...
@@ -78,6 +84,13 @@ notify("Precio en target", silent=False)                 # telegram con sonido (
 notify("Alerta crítica", priority=1)                     # telegram, prioridad alta, silencioso
 notify("Proceso finalizado", channel="google_home")      # habla en todos los parlantes
 notify("HA caído", priority=1, analyze=True, source="chequeo_ha")  # análisis + origen
+notify(                                                              # email
+    "El cierre falló en el paso IOL.",
+    channel="email",
+    email_to="destino@gmail.com",
+    email_subject="[cedears] Error en cierre diario",
+    source="cedears",
+)
 ```
 
 El parámetro `source` identifica qué servicio encoló la notificación. No afecta la
@@ -92,6 +105,8 @@ node enqueue.js "mensaje" telegram 1 0           # telegram, prioridad 1, con so
 node enqueue.js "mensaje" google_home            # Google Home
 # args: "mensaje" [canal] [prioridad] [silent] [analyze] [source]
 node enqueue.js "HA caído" telegram 1 0 1 chequeo_ha   # análisis autónomo + origen
+# args email: "mensaje" email [prioridad] [silent] [analyze] [source] email_to email_subject
+node enqueue.js "El cierre falló." email 5 1 0 cedears "dest@gmail.com" "[cedears] Error cierre"
 ```
 
 ## Formato de los mensajes entregados
@@ -100,6 +115,7 @@ El timestamp se agrega automáticamente al momento de enviar, reflejando cuándo
 
 - **Telegram:** `[18/05 22:08] El script terminó`
 - **Google Home:** el mensaje se entrega tal cual, sin prefijo de hora.
+- **Email:** From fijo `notifier <GMAIL_USER>`. Subject y destinatario definidos por el caller.
 
 ---
 
@@ -146,14 +162,24 @@ HA_TOKEN=<long-lived access token de Home Assistant>
 - `es-AR-TomasNeural` — masculina ✓ (default)
 - `es-AR-ElenaNeural` — femenina
 
+### email
+- Envía via Gmail SMTP (nodemailer). Requiere `GMAIL_USER` y `GMAIL_APP_PASSWORD` en `.env`.
+- From fijo: `"notifier" <GMAIL_USER>`. El proceso que invoca se identifica en el subject.
+- Destinatario (`email_to`) y asunto (`email_subject`) definidos por el caller en cada mensaje.
+- Valida formato de `email_to` antes de encolar (requiere `@` y dominio con `.`).
+- **Nunca bloqueado por DND** — siempre entrega.
+- Texto plano únicamente.
+
+**Credenciales:** usar un App Password de Google (no la contraseña normal de la cuenta). Generarlo en `myaccount.google.com → Seguridad → Contraseñas de aplicaciones`.
+
 ---
 
 ## Do Not Disturb
 
-| Situación | google_home | telegram silent=1 | telegram silent=0 |
-|-----------|-------------|-------------------|-------------------|
-| Fuera de DND | envía | silencioso | con sonido |
-| En DND (23-8h) | **skipped** | silencioso | silencioso |
+| Situación | google_home | telegram silent=1 | telegram silent=0 | email |
+|-----------|-------------|-------------------|-------------------|-------|
+| Fuera de DND | envía | silencioso | con sonido | envía |
+| En DND (23-8h) | **skipped** | silencioso | silencioso | envía |
 
 `google_home` en DND se marca `skipped` inmediatamente — no se entrega nunca, queda como evidencia en la cola. No hay catarata de mensajes al salir del DND.
 
@@ -180,6 +206,8 @@ CREATE TABLE queue (
   source     TEXT    NOT NULL DEFAULT 'unknown',  -- qué servicio encoló (contexto p/ analyzer)
   status     TEXT    NOT NULL DEFAULT 'pending',  -- pending | sent | failed
   retries    INTEGER NOT NULL DEFAULT 0,
+  email_to      TEXT NOT NULL DEFAULT '',  -- destinatario (solo canal email)
+  email_subject TEXT NOT NULL DEFAULT '',  -- asunto (solo canal email)
   created_at TEXT    NOT NULL DEFAULT (datetime('now')),
   sent_at    TEXT
 );
