@@ -129,7 +129,7 @@ function isValidEmail(addr) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr);
 }
 
-function sendEmail(to, subject, message) {
+function sendEmail(to, subject, message, source) {
   if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
     return Promise.reject(new Error('Email: faltan GMAIL_USER o GMAIL_APP_PASSWORD en .env'));
   }
@@ -140,8 +140,9 @@ function sendEmail(to, subject, message) {
     service: 'gmail',
     auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }
   });
+  const displayName = source && source !== 'unknown' ? source : 'notifier';
   return transporter.sendMail({
-    from:    GMAIL_USER,
+    from:    `"${displayName}" <${GMAIL_USER}>`,
     to,
     subject: subject || '(sin asunto)',
     text:    message
@@ -274,7 +275,7 @@ async function processBatch(db) {
       }
       if (row.channel === 'google_home') await sendGoogleHome(row.message);
       if (row.channel === 'lights')      await sendLights(row.priority);
-      if (row.channel === 'email')       await sendEmail(row.email_to, row.email_subject, row.message);
+      if (row.channel === 'email')       await sendEmail(row.email_to, row.email_subject, row.message, row.source);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel} silent=${row.silent}`);
       // Coreografía: si el evento pide análisis, disparar el hook recién ahora
