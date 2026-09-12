@@ -4,3 +4,4 @@ logs/
 queue.db
 queue.db-shm
 queue.db-wal
+__pycache__/

@@ -93,9 +93,27 @@ notify(                                                              # email
 )
 ```
 
-El parámetro `source` identifica qué servicio encoló la notificación. No afecta la
-entrega; viaja en la fila para que el **analyzer** sepa el origen del incidente y
-oriente el diagnóstico (ver su catálogo de monitores). Opcional, default `'unknown'`.
+El parámetro `source` identifica qué proceso encoló la notificación. Viaja en la fila
+para que el **analyzer** sepa el origen del incidente, y **el notifier lo estampa en lo
+que se entrega**: `[proceso]` adelante del texto de Telegram y del asunto del mail, y
+«Aviso de <proceso>» dicho en palabras por el parlante. Si no se pasa, se deriva del
+script en ejecución — nunca queda en `'unknown'` por olvido.
+
+Un mensaje ya etiquetado por el llamador no se etiqueta dos veces: vale el proceso
+completo o su última parte (`[piso_jubilacion]` cuenta para `finanzas-cuenta/piso_jubilacion`).
+
+### Pruebas: `prueba=True`
+
+```python
+notify("Probando el canal", prueba=True)                  # source → '<script>/prueba'
+notify("Probando", channel="google_home", source="vencimientos", prueba=True)
+```
+
+Marca el `source` con el sufijo `/prueba` y el notifier hace el resto: `[PRUEBA]` al
+principio del texto y del asunto, y por el parlante *«Atención, esto es una prueba, no es
+un aviso real»* —el TTS lee el texto, así que un corchete sonaría mal—. Es la regla de
+CLAUDE.md, y está acá y no en cada llamador a propósito: el tag no puede depender de que
+alguien se acuerde de ponerlo.
 
 ### Desde CLI
 
@@ -104,6 +122,7 @@ node enqueue.js "mensaje"                        # telegram, silencioso
 node enqueue.js "mensaje" telegram 1 0           # telegram, prioridad 1, con sonido
 node enqueue.js "mensaje" google_home            # Google Home
 # args: "mensaje" [canal] [prioridad] [silent] [analyze] [source]
+node enqueue.js "Probando" telegram 5 1 0 vencimientos/prueba   # sale marcado [PRUEBA]
 node enqueue.js "HA caído" telegram 1 0 1 chequeo_ha   # análisis autónomo + origen
 # args email: "mensaje" email [prioridad] [silent] [analyze] [source] email_to email_subject
 node enqueue.js "El cierre falló." email 5 1 0 cedears "dest@gmail.com" "[cedears] Error cierre"
@@ -113,9 +132,14 @@ node enqueue.js "El cierre falló." email 5 1 0 cedears "dest@gmail.com" "[cedea
 
 El timestamp se agrega automáticamente al momento de enviar, reflejando cuándo ocurrió el evento (no cuándo se entregó — puede diferir si hubo DND).
 
-- **Telegram:** `[18/05 22:08] El script terminó`
-- **Google Home:** el mensaje se entrega tal cual, sin prefijo de hora.
-- **Email:** From fijo `notifier <GMAIL_USER>`. Subject y destinatario definidos por el caller.
+Todo mensaje entregado dice **qué proceso lo encoló** (campo `source`), y si es una
+prueba lo dice también. Lo estampa el notifier al enviar, no el llamador.
+
+- **Telegram:** `[18/05 22:08] [cedears/pf-vencido] El script terminó`
+- **Google Home:** `Aviso de cedears pf vencido. El script terminó` — sin prefijo de hora.
+- **Email:** From fijo `notifier <GMAIL_USER>`; asunto `[cedears/pf-vencido] Asunto del caller`.
+- **Prueba** (`source` terminado en `/prueba`): `[PRUEBA]` delante del texto y del asunto;
+  por el parlante, *«Atención, esto es una prueba, no es un aviso real»*.
 
 ---
 
@@ -164,13 +188,26 @@ HA_TOKEN=<long-lived access token de Home Assistant>
 
 ### email
 - Envía via Gmail SMTP (nodemailer). Requiere `GMAIL_USER` y `GMAIL_APP_PASSWORD` en `.env`.
-- From fijo: `"notifier" <GMAIL_USER>`. El proceso que invoca se identifica en el subject.
+- From fijo: `"notifier" <GMAIL_USER>`. El proceso que invoca se identifica en el subject,
+  estampado por el notifier a partir de `source` (el caller ya no necesita prefijarlo a mano).
 - Destinatario (`email_to`) y asunto (`email_subject`) definidos por el caller en cada mensaje.
 - Valida formato de `email_to` antes de encolar (requiere `@` y dominio con `.`).
 - **Nunca bloqueado por DND** — siempre entrega.
 - Texto plano únicamente.
 
 **Credenciales:** usar un App Password de Google (no la contraseña normal de la cuenta). Generarlo en `myaccount.google.com → Seguridad → Contraseñas de aplicaciones`.
+
+---
+
+## Tests
+
+```bash
+node test_etiquetas.js     # etiquetado de origen y de prueba en la salida
+python3 test_client.py     # el origen que se guarda al encolar
+```
+
+No tocan la cola de producción: el primero importa `notifier.js` sin arrancar el daemon
+(`require.main`), el segundo usa una base temporal.
 
 ---
 
@@ -203,7 +240,8 @@ CREATE TABLE queue (
   priority   INTEGER NOT NULL DEFAULT 5,   -- menor número = mayor prioridad
   silent     INTEGER NOT NULL DEFAULT 1,   -- 1=silencioso, 0=con sonido
   analyze    INTEGER NOT NULL DEFAULT 0,   -- 1=dispara hook de análisis al pasar a 'sent'
-  source     TEXT    NOT NULL DEFAULT 'unknown',  -- qué servicio encoló (contexto p/ analyzer)
+  source     TEXT    NOT NULL DEFAULT 'unknown',  -- qué proceso encoló: se estampa en la entrega
+                                                 -- y da contexto al analyzer. Sufijo '/prueba' → [PRUEBA]
   status     TEXT    NOT NULL DEFAULT 'pending',  -- pending | sent | failed
   retries    INTEGER NOT NULL DEFAULT 0,
   email_to      TEXT NOT NULL DEFAULT '',  -- destinatario (solo canal email)

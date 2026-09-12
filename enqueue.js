@@ -9,11 +9,23 @@
 //   node enqueue.js "HA caído" telegram 1 0 1         ← marcado para análisis autónomo
 //   node enqueue.js "HA caído" telegram 1 0 1 chequeo_ha   ← + origen para el analyzer
 //   node enqueue.js "Alerta" email 5 1 0 unknown dest@gmail.com "Asunto del mail"
+//   node enqueue.js "Probando" telegram 5 1 0 vencimientos/prueba   ← sale marcado [PRUEBA]
+// Sin source explícito se usa NOTIFIER_SOURCE del entorno, o 'cli'.
 
 const path     = require('path');
 const Database = require('better-sqlite3');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'queue.db');
+
+// El notifier estampa el proceso (y el [PRUEBA]) a partir de `source`, así que un
+// 'unknown' por olvido rompe la regla: se resuelve acá, no en cada llamador.
+function normalizarOrigen(source) {
+  const origen = String(source || '').trim().replace(/^\/+|\/+$/g, '');
+  if (!origen || origen.toLowerCase() === 'unknown') {
+    return (process.env.NOTIFIER_SOURCE || 'cli').trim() || 'cli';
+  }
+  return origen;
+}
 
 function isValidEmail(addr) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr);
@@ -42,8 +54,8 @@ if (channel === 'email' && !isValidEmail(emailTo)) {
 }
 
 try {
-  const id = enqueue(message, channel, parseInt(priority), parseInt(silent), parseInt(analyze), source, emailTo, emailSubject);
-  console.log(`queued id=${id} channel=${channel} priority=${priority} silent=${silent} analyze=${analyze} source=${source} email_to=${emailTo}`);
+  const id = enqueue(message, channel, parseInt(priority), parseInt(silent), parseInt(analyze), normalizarOrigen(source), emailTo, emailSubject);
+  console.log(`queued id=${id} channel=${channel} priority=${priority} silent=${silent} analyze=${analyze} source=${normalizarOrigen(source)} email_to=${emailTo}`);
 } catch (err) {
   console.error(`Error: ${err.message}`);
   process.exit(1);

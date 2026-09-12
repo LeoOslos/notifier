@@ -94,6 +94,52 @@ function initDb() {
   return db;
 }
 
+// ── Etiquetado de origen (regla de CLAUDE.md) ─────────────────────────────────
+// Toda notificación dice qué proceso la encoló, y si es una prueba lo dice también.
+// Las dos cosas se derivan del campo `source` ('proceso' o 'proceso/prueba') y se
+// estampan ACÁ, en la salida: el tag no puede depender de que el llamador se acuerde.
+const SUFIJO_PRUEBA = '/prueba';
+
+function etiquetas(source) {
+  const crudo    = String(source || '').trim();
+  const esPrueba = crudo.toLowerCase().endsWith(SUFIJO_PRUEBA);
+  let proceso    = (esPrueba ? crudo.slice(0, -SUFIJO_PRUEBA.length) : crudo).replace(/^\/+|\/+$/g, '').trim();
+  if (!proceso || proceso.toLowerCase() === 'unknown') proceso = 'desconocido';
+  return { proceso, esPrueba };
+}
+
+function escaparHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ¿El llamador ya puso el tag adelante? Vale el proceso completo o su última hoja,
+// así '[piso_jubilacion]' cuenta como etiquetado de 'finanzas-cuenta/piso_jubilacion'.
+function yaEtiquetado(texto, proceso) {
+  // El [PRUEBA] va delante del tag de proceso: se saltea para no re-estampar.
+  const m = String(texto).replace(/^\s*(?:\[PRUEBA\]\s*)+/i, '').match(/^\s*\[([^\]]+)\]/);
+  if (!m) return false;
+  const puesto = m[1].trim().toLowerCase();
+  return puesto === proceso.toLowerCase() || puesto === proceso.split('/').pop().toLowerCase();
+}
+
+// Texto escrito (Telegram, asunto de mail): [PRUEBA] [proceso] mensaje.
+function prefijarTexto(texto, { proceso, esPrueba }, { html = false } = {}) {
+  let out = String(texto);
+  if (!yaEtiquetado(out, proceso)) out = `[${html ? escaparHtml(proceso) : proceso}] ${out}`;
+  if (esPrueba && !/\[PRUEBA\]/i.test(out)) out = `[PRUEBA] ${out}`;
+  return out;
+}
+
+// Parlante: el TTS lee el texto, así que los corchetes sonarían mal → va dicho en palabras.
+function prefijarVoz(texto, { proceso, esPrueba }) {
+  const nombre = proceso.replace(/[_\-\/]+/g, ' ');
+  const partes = [];
+  if (esPrueba) partes.push('Atención, esto es una prueba, no es un aviso real.');
+  partes.push(`Aviso de ${nombre}.`);
+  partes.push(String(texto));
+  return partes.join(' ');
+}
+
 // ── Telegram ──────────────────────────────────────────────────────────────────
 function sendTelegram(message, silent = true) {
   return new Promise((resolve, reject) => {
@@ -267,16 +313,17 @@ async function processBatch(db) {
       continue;
     }
     try {
-      const ts = fmtTime(row.created_at);
+      const ts   = fmtTime(row.created_at);
+      const tags = etiquetas(row.source);
       if (row.channel === 'telegram') {
         const silent = row.silent || isDndTime();
-        await sendTelegram(`[${ts}] ${row.message}`, !!silent);
+        await sendTelegram(`[${ts}] ${prefijarTexto(row.message, tags, { html: true })}`, !!silent);
       }
-      if (row.channel === 'google_home') await sendGoogleHome(row.message);
+      if (row.channel === 'google_home') await sendGoogleHome(prefijarVoz(row.message, tags));
       if (row.channel === 'lights')      await sendLights(row.priority);
-      if (row.channel === 'email')       await sendEmail(row.email_to, row.email_subject, row.message);
+      if (row.channel === 'email')       await sendEmail(row.email_to, prefijarTexto(row.email_subject || '(sin asunto)', tags), row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
-      log(`sent id=${row.id} channel=${row.channel} silent=${row.silent}`);
+      log(`sent id=${row.id} channel=${row.channel} silent=${row.silent} source=${tags.proceso}${tags.esPrueba ? ' PRUEBA' : ''}`);
       // Coreografía: si el evento pide análisis, disparar el hook recién ahora
       // (status='sent' garantiza que el incidente ya se entregó antes del análisis).
       if (row.analyze) fireAnalyzeHook(row.id);
@@ -317,4 +364,9 @@ function main() {
   process.on('SIGINT',  shutdown);
 }
 
-main();
+// Solo arranca el daemon si se ejecuta como programa: `require` (tests) no debe
+// levantar el poll contra la cola real.
+if (require.main === module) main();
+
+// Exportado solo para los tests de etiquetado (test_etiquetas.js).
+module.exports = { etiquetas, prefijarTexto, prefijarVoz, yaEtiquetado };
