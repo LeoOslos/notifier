@@ -42,8 +42,9 @@ module.exports = {
     error_file:      './logs/error.log',
     out_file:        './logs/output.log',
     log_file:        './logs/combined.log',
-    time:            true,
-    merge_logs:      true,
-    log_date_format: 'YYYY-MM-DD HH:mm:ss'
+    // Sin fecha de pm2: cada línea ya trae el formato estándar (registro_log.js). Cambiar esto exige
+    // `pm2 delete notifier && pm2 start ecosystem.config.js && pm2 save`: un restart no relee el ecosystem.
+    time:            false,
+    merge_logs:      true
   }]
 };
