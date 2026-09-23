@@ -220,6 +220,36 @@ No tocan la cola de producción: el primero importa `notifier.js` sin arrancar e
 
 `google_home` en DND se marca `skipped` inmediatamente — no se entrega nunca, queda como evidencia en la cola. No hay catarata de mensajes al salir del DND.
 
+## Un aviso que no se pudo entregar no se entrega después
+
+`MAX_RETRIES=3` reintentos con `POLL_INTERVAL` de por medio y, si no salió, el aviso queda
+`failed` en la cola **para siempre**: nadie lo reencola cuando la red vuelve. Es el
+comportamiento buscado, por la misma razón que el `skipped` del DND — **un aviso
+describe el estado del momento en que se encoló, y entregarlo tarde informa mal**.
+
+El caso que lo muestra es el corte de luz del 2026-09-22 (INC-2026-036), que dejó cuatro
+avisos en `failed` con `getaddrinfo ENOTFOUND api.telegram.org`: «corte de luz detectado»,
+«WAN caída», «eno1 sin ruta al gateway — requiere intervención manual» y «la sincronización
+de memoria viene fallando». Tres horas después los cuatro eran falsos, y el peor —el de
+`eno1`— habría mandado a intervenir a mano sobre algo que se resolvió solo al volver la luz.
+Lo que sí corresponde avisar cuando el servicio vuelve es **que volvió**, y de eso se encarga
+el aviso de recuperación de `power-monitor` (y el de arranque de `boot-notify.sh`), que se
+encolan con la red ya disponible.
+
+Consecuencia para el que llama: **si un aviso tiene que sobrevivir a una caída de red, la
+cola del notifier no es el lugar.** Eso es estado, y va a un archivo o a una base que el
+proceso relea al arrancar.
+
+Los `failed` quedan en la cola como evidencia hasta que los borra la depuración
+(`QUEUE_RETENTION_DAYS`); para verlos:
+
+```bash
+sqlite3 ~/notifier/queue.db "select id, created_at, source, substr(message,1,60) from queue where status='failed' order by id desc limit 10;"
+```
+
+Ojo con las horas: `created_at` se guarda en **UTC** y el log del servicio va en hora local
+(-03), así que la misma entrega aparece con tres horas de diferencia según dónde se la mire.
+
 ## Depuración de la cola
 
 Los registros con status `sent`, `failed` o `skipped` se eliminan automáticamente al arrancar el servicio y cada hora. Retención configurable en `.env`:
