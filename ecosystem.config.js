@@ -31,7 +31,7 @@ module.exports = {
       PIPER_LENGTH_SCALE: env.PIPER_LENGTH_SCALE || '1.5',
       DND_START:    env.DND_START    || '23',
       DND_END:      env.DND_END      || '8',
-      DND_CHANNELS:         env.DND_CHANNELS         || 'google_home',
+      DND_CHANNELS:         env.DND_CHANNELS         || 'google_home,wiim',
       QUEUE_RETENTION_DAYS: env.QUEUE_RETENTION_DAYS || '30',
       GOOGLE_HOME_DEVICE:   env.GOOGLE_HOME_DEVICE   || '',
       HA_URL:               env.HA_URL               || 'http://localhost:8123',

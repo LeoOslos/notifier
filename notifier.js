@@ -24,9 +24,10 @@ const GEMINI_TTS_TIMEOUT = parseInt(process.env.GEMINI_TTS_TIMEOUT || '30000');
 const PIPER_BIN          = process.env.PIPER_BIN            || path.join(__dirname, 'piper-venv', 'bin', 'piper');
 const PIPER_MODEL        = process.env.PIPER_MODEL          || path.join(__dirname, 'voces', 'es_AR-daniela-high.onnx');
 const PIPER_LENGTH_SCALE = process.env.PIPER_LENGTH_SCALE   || '1.5';   // >1 = más lento
-const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
+const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home,wiim').split(',').map(s => s.trim());
 const QUEUE_RETENTION_DAYS = parseInt(process.env.QUEUE_RETENTION_DAYS || '30');
 const GOOGLE_HOME_DEVICE   = process.env.GOOGLE_HOME_DEVICE || '';
+const WIIM_HOST            = process.env.WIIM_HOST          || '192.168.1.147';
 const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
 const HA_TOKEN             = process.env.HA_TOKEN           || '';
 // Hook coreográfico: comando opaco a ejecutar cuando una fila analyze=1 pasa a 'sent'.
@@ -341,6 +342,33 @@ async function sendGoogleHome(message) {
   setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 30000);
 }
 
+// ── WiiM ──────────────────────────────────────────────────────────────────────
+// setPlayerCmd:play corta lo que esté sonando y no lo retoma: el aviso siempre se oye.
+// playPromptUrl (que baja la música y la retoma) se probó el 2026-09-26 y no suena ni
+// con el WiiM parado ni con música por Cast.
+async function sendWiim(message) {
+  const { filename, filepath } = await generateTts(message);
+  const audioUrl = `http://${getLocalIp()}:${TTS_PORT}/${filename}`;
+  log(`TTS url: ${audioUrl}`);
+  await new Promise((resolve, reject) => {
+    const req = https.get({
+      hostname:           WIIM_HOST,
+      path:               `/httpapi.asp?command=setPlayerCmd:play:${audioUrl}`,
+      rejectUnauthorized: false,   // el WiiM usa un certificado autofirmado
+      timeout:            10000
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => data.trim() === 'OK' ? resolve() : reject(new Error(`WiiM respondió: ${data.trim().slice(0, 100)}`)));
+    });
+    req.on('timeout', () => req.destroy(new Error('WiiM: timeout 10000ms')));
+    req.on('error', reject);
+  });
+  log(`wiim: ok ${WIIM_HOST}`);
+  // El WiiM puede leer el archivo de a poco mientras suena: se borra más tarde que en Google Home.
+  setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 5 * 60 * 1000);
+}
+
 // ── Queue cleanup ─────────────────────────────────────────────────────────────
 function purgeOldRecords(db) {
   const { changes } = db.prepare(`
@@ -386,6 +414,7 @@ async function processBatch(db) {
         await sendTelegram(`[${ts}] ${prefijarTexto(row.message, tags, { html: true })}`, !!silent);
       }
       if (row.channel === 'google_home') await sendGoogleHome(prefijarVoz(row.message, tags));
+      if (row.channel === 'wiim')        await sendWiim(prefijarVoz(row.message, tags));
       if (row.channel === 'lights')      await sendLights(row.priority);
       if (row.channel === 'email')       await sendEmail(row.email_to, prefijarTexto(row.email_subject || '(sin asunto)', tags), row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);

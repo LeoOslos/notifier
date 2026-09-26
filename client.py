@@ -6,6 +6,7 @@ Uso:
     notify("Alerta crítica", priority=1)
     notify("Precio llegó al target", channel="telegram", silent=False)  # con sonido (si no es DND)
     notify("Parlante", channel="google_home")
+    notify("Parlante", channel="wiim")
     notify("HA caído", priority=1, analyze=True)  # marca el evento para análisis autónomo
     notify("HA caído", priority=1, analyze=True, source="chequeo_ha")  # + origen p/ analyzer
     notify("Texto", channel="email", email_to="dest@gmail.com", email_subject="Asunto")

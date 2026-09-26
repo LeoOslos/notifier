@@ -88,6 +88,7 @@ notify("El script terminó")                              # telegram, silencioso
 notify("Precio en target", silent=False)                 # telegram con sonido (si no es DND)
 notify("Alerta crítica", priority=1)                     # telegram, prioridad alta, silencioso
 notify("Proceso finalizado", channel="google_home")      # habla en todos los parlantes
+notify("Proceso finalizado", channel="wiim")             # habla por el WiiM Amp
 notify("HA caído", priority=1, analyze=True, source="chequeo_ha")  # análisis + origen
 notify(                                                              # email
     "El cierre falló en el paso IOL.",
@@ -193,6 +194,14 @@ HA_TOKEN=<long-lived access token de Home Assistant>
 - En DND: se marca `skipped` inmediatamente, nunca se entrega.
 
 Otras voces de Gemini: `GEMINI_TTS_VOICE` (Charon, Puck, …). Otro modelo de Piper: `PIPER_MODEL`.
+
+### wiim
+- Misma voz que `google_home` (Kore, respaldo Piper), pero por el WiiM Amp (`WIIM_HOST`, default
+  `192.168.1.147`) con su API HTTP: `setPlayerCmd:play:<url>`. Sin chime.
+- **Corta lo que esté sonando y no lo retoma**: si se eligió `wiim`, el aviso se oye siempre.
+  `playPromptUrl` (bajar la música y retomarla) se probó y no suena en este equipo, ni parado
+  ni con música por Cast.
+- En DND: `skipped`, igual que `google_home`.
 
 ### email
 - Envía via Gmail SMTP (nodemailer). Requiere `GMAIL_USER` y `GMAIL_APP_PASSWORD` en `.env`.
