@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Castea un archivo MP3 a dispositivos Google Home descubiertos en la red.
+Castea un archivo de audio (MP3 o WAV) a dispositivos Google Home descubiertos en la red.
 Uso: cast_google_home.py <url_audio> [nombre_dispositivo]
   nombre_dispositivo: substring case-insensitive (ej: "Mini"). Omitir = todos.
 """
@@ -32,7 +32,7 @@ def cast_to(audio_url: str, device_filter: str = "") -> list[str]:
                 cast.quit_app()
                 time.sleep(1)
             mc = cast.media_controller
-            mc.play_media(audio_url, "audio/mpeg")
+            mc.play_media(audio_url, "audio/wav" if audio_url.endswith(".wav") else "audio/mpeg")
             mc.block_until_active(timeout=15)
             print(f"ok {name}", flush=True)
         except Exception as e:

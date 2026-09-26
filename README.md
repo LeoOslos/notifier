@@ -34,7 +34,11 @@ pm2 save
 
 ### Requisitos Python (Google Home)
 ```bash
-pip install pychromecast edge-tts
+pip install pychromecast
+# Voz de respaldo (Piper, local): venv propio + modelo de voz (114 MB, fuera de Git)
+python3 -m venv piper-venv && piper-venv/bin/pip install -r requirements-piper.txt
+mkdir -p voces && for f in es_AR-daniela-high.onnx es_AR-daniela-high.onnx.json; do
+  curl -sfL -o voces/$f https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_AR/daniela/high/$f; done
 sudo ufw allow 9876/tcp   # el Mini necesita descargar el MP3 desde esta máquina
 ```
 
@@ -53,7 +57,8 @@ DND_CHANNELS=google_home,lights  # canales bloqueados (separados por coma)
 
 # Opcionales
 TTS_PORT=9876
-TTS_VOICE=es-AR-TomasNeural   # voz TTS (edge-tts). Alternativa: es-AR-ElenaNeural
+GEMINI_API_KEY=...            # voz principal (Gemini TTS). Sin clave → siempre Piper
+PIPER_LENGTH_SCALE=1.5        # velocidad de la voz de respaldo (>1 = más lenta)
 GOOGLE_HOME_DEVICE=Mini       # substring del nombre del dispositivo. Vacío = todos.
 POLL_INTERVAL=2000
 MAX_RETRIES=3
@@ -177,14 +182,17 @@ HA_TOKEN=<long-lived access token de Home Assistant>
 - `silent=0`: envía con sonido, excepto si está en horario DND → fuerza silencioso.
 
 ### google_home
-- Genera TTS con **edge-tts** (voz `es-AR-TomasNeural` por defecto — natural, argentina).
-- Sirve el MP3 por HTTP desde `wlo1` (IP WiFi: 192.168.0.100), puerto 9876.
+- Genera la voz con **Gemini TTS** (voz `Kore`, modelo `gemini-2.5-flash-preview-tts`).
+  Si Gemini falla por cualquier motivo (sin internet, cuota, error de API, timeout de 30 s),
+  cae a **Piper** local (`es_AR-daniela-high`, `length_scale` 1.5 = más lenta). El log dice
+  cuál habló: `tts: gemini Kore` o `tts: gemini falló (...) → piper`.
+- Antes de la voz suena un chime: es del propio Google Home al abrir la sesión de Cast
+  (probado casteando un audio inexistente: suena igual). No sale del notifier.
+- Sirve el WAV por HTTP desde `wlo1` (IP WiFi: 192.168.0.100), puerto 9876.
 - Castea al dispositivo cuyo nombre contenga `GOOGLE_HOME_DEVICE` (substring, case-insensitive). Si está vacío, castea a todos.
 - En DND: se marca `skipped` inmediatamente, nunca se entrega.
 
-**Voces disponibles en español argentino:**
-- `es-AR-TomasNeural` — masculina ✓ (default)
-- `es-AR-ElenaNeural` — femenina
+Otras voces de Gemini: `GEMINI_TTS_VOICE` (Charon, Puck, …). Otro modelo de Piper: `PIPER_MODEL`.
 
 ### email
 - Envía via Gmail SMTP (nodemailer). Requiere `GMAIL_USER` y `GMAIL_APP_PASSWORD` en `.env`.

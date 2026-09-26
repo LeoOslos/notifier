@@ -16,7 +16,14 @@ const POLL_INTERVAL    = parseInt(process.env.POLL_INTERVAL || '2000');
 const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
 const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
 const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
-const TTS_VOICE        = process.env.TTS_VOICE              || 'es-AR-TomasNeural';
+// Voz principal: Gemini TTS. Si falla por cualquier motivo (sin internet, cuota, API), Piper local.
+const GEMINI_API_KEY     = process.env.GEMINI_API_KEY       || '';
+const GEMINI_TTS_MODEL   = process.env.GEMINI_TTS_MODEL     || 'gemini-2.5-flash-preview-tts';
+const GEMINI_TTS_VOICE   = process.env.GEMINI_TTS_VOICE     || 'Kore';
+const GEMINI_TTS_TIMEOUT = parseInt(process.env.GEMINI_TTS_TIMEOUT || '30000');
+const PIPER_BIN          = process.env.PIPER_BIN            || path.join(__dirname, 'piper-venv', 'bin', 'piper');
+const PIPER_MODEL        = process.env.PIPER_MODEL          || path.join(__dirname, 'voces', 'es_AR-daniela-high.onnx');
+const PIPER_LENGTH_SCALE = process.env.PIPER_LENGTH_SCALE   || '1.5';   // >1 = más lento
 const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home').split(',').map(s => s.trim());
 const QUEUE_RETENTION_DAYS = parseInt(process.env.QUEUE_RETENTION_DAYS || '30');
 const GOOGLE_HOME_DEVICE   = process.env.GOOGLE_HOME_DEVICE || '';
@@ -217,13 +224,14 @@ function getLocalIp() {
 function startTtsServer() {
   const server = http.createServer((req, res) => {
     const filename = path.basename(req.url);
-    if (!filename.startsWith('notifier_tts_') || !filename.endsWith('.mp3')) {
+    const tipo     = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav' }[path.extname(filename)];
+    if (!filename.startsWith('notifier_tts_') || !tipo) {
       res.writeHead(404); res.end(); return;
     }
     const filepath = path.join(os.tmpdir(), filename);
     if (!fs.existsSync(filepath)) { res.writeHead(404); res.end(); return; }
     const size = fs.statSync(filepath).size;
-    res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': size });
+    res.writeHead(200, { 'Content-Type': tipo, 'Content-Length': size });
     fs.createReadStream(filepath).pipe(res);
   });
   server.listen(TTS_PORT, () => log(`TTS server en :${TTS_PORT}`));
@@ -232,17 +240,72 @@ function startTtsServer() {
 
 
 // ── Google Home ───────────────────────────────────────────────────────────────
-function generateTts(message) {
-  const { exec } = require('child_process');
-  const filename = `notifier_tts_${Date.now()}.mp3`;
-  const filepath = path.join(os.tmpdir(), filename);
-  return new Promise((resolve, reject) => {
-    const cmd = `/home/leoadmin/.local/bin/edge-tts --voice "${TTS_VOICE}" --text "${message.replace(/"/g, '\\"')}" --write-media "${filepath}"`;
-    exec(cmd, { timeout: 15000 }, (err) => {
-      if (err) reject(err);
-      else resolve({ filename, filepath });
-    });
+// Encabezado WAV para PCM 16 bit mono (Gemini devuelve PCM crudo, sin contenedor).
+function wavDePcm(pcm, rate) {
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8);
+  h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
+  h.write('data', 36); h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+}
+
+function ttsGemini(message, filepath) {
+  if (!GEMINI_API_KEY) return Promise.reject(new Error('falta GEMINI_API_KEY'));
+  const body = JSON.stringify({
+    contents: [{ parts: [{ text: `Leé en voz alta, en español rioplatense de Argentina, con tono claro de aviso: ${message}` }] }],
+    generationConfig: {
+      responseModalities: ['AUDIO'],
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: GEMINI_TTS_VOICE } } }
+    }
   });
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'generativelanguage.googleapis.com',
+      path:     `/v1beta/models/${GEMINI_TTS_MODEL}:generateContent`,
+      method:   'POST',
+      timeout:  GEMINI_TTS_TIMEOUT,
+      headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'x-goog-api-key': GEMINI_API_KEY }
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try {
+          if (res.statusCode !== 200) throw new Error(`HTTP ${res.statusCode}: ${data.slice(0, 200)}`);
+          const inline = JSON.parse(data).candidates[0].content.parts[0].inlineData;
+          const rate   = parseInt((inline.mimeType.match(/rate=(\d+)/) || [])[1] || '24000');
+          fs.writeFileSync(filepath, wavDePcm(Buffer.from(inline.data, 'base64'), rate));
+          resolve();
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error(`timeout ${GEMINI_TTS_TIMEOUT}ms`)));
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+function ttsPiper(message, filepath) {
+  const { execFile } = require('child_process');
+  return new Promise((resolve, reject) => {
+    const child = execFile(PIPER_BIN, ['-m', PIPER_MODEL, '--length-scale', PIPER_LENGTH_SCALE, '-f', filepath],
+      { timeout: 30000 }, (err, stdout, stderr) => err ? reject(new Error(stderr.trim() || err.message)) : resolve());
+    child.stdin.end(message);
+  });
+}
+
+async function generateTts(message) {
+  const filename = `notifier_tts_${Date.now()}.wav`;
+  const filepath = path.join(os.tmpdir(), filename);
+  try {
+    await ttsGemini(message, filepath);
+    log(`tts: gemini ${GEMINI_TTS_VOICE}`);
+  } catch (err) {
+    log(`tts: gemini falló (${err.message}) → piper`);
+    await ttsPiper(message, filepath);
+    log(`tts: piper ${path.basename(PIPER_MODEL)} length_scale=${PIPER_LENGTH_SCALE}`);
+  }
+  return { filename, filepath };
 }
 
 async function sendLights(priority) {
@@ -372,4 +435,4 @@ function main() {
 if (require.main === module) main();
 
 // Exportado solo para los tests de etiquetado (test_etiquetas.js).
-module.exports = { etiquetas, prefijarTexto, prefijarVoz, yaEtiquetado };
+module.exports = { etiquetas, prefijarTexto, prefijarVoz, yaEtiquetado, generateTts };
