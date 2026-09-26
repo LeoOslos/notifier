@@ -198,9 +198,13 @@ Otras voces de Gemini: `GEMINI_TTS_VOICE` (Charon, Puck, …). Otro modelo de Pi
 ### wiim
 - Misma voz que `google_home` (Kore, respaldo Piper), pero por el WiiM Amp (`WIIM_HOST`, default
   `192.168.1.147`) con su API HTTP: `setPlayerCmd:play:<url>`. Sin chime.
-- **Corta lo que esté sonando y no lo retoma**: si se eligió `wiim`, el aviso se oye siempre.
-  `playPromptUrl` (bajar la música y retomarla) se probó y no suena en este equipo, ni parado
-  ni con música por Cast.
+- **Si el WiiM está tocando música, el aviso va al Google Home** (`google_home`), porque
+  `setPlayerCmd:play` cortaría la música sin retomarla. `playPromptUrl` (bajar la música y
+  retomarla) se probó y no suena en este equipo, ni parado ni con música por Cast.
+- **Si está parado:** suena el chime (`WIIM_CHIME`, default `sonidos/chime.mp3`) y después el aviso.
+  El chime no está en Git (la licencia de Mixkit no permite redistribuirlo suelto); se baja con
+  `mkdir -p sonidos && curl -sfL -o sonidos/chime.mp3 https://assets.mixkit.co/active_storage/sfx/914/914-preview.mp3`
+  («Happy bells notification», Mixkit). Si falta, el aviso sale sin chime.
 - En DND: `skipped`, igual que `google_home`.
 
 ### email

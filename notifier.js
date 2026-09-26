@@ -28,6 +28,8 @@ const DND_CHANNELS         = (process.env.DND_CHANNELS || 'google_home,wiim').sp
 const QUEUE_RETENTION_DAYS = parseInt(process.env.QUEUE_RETENTION_DAYS || '30');
 const GOOGLE_HOME_DEVICE   = process.env.GOOGLE_HOME_DEVICE || '';
 const WIIM_HOST            = process.env.WIIM_HOST          || '192.168.1.147';
+// Sonido previo al aviso en el WiiM (fuera de Git: ver README). Si no existe, el aviso sale sin él.
+const WIIM_CHIME           = process.env.WIIM_CHIME         || path.join(__dirname, 'sonidos', 'chime.mp3');
 const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
 const HA_TOKEN             = process.env.HA_TOKEN           || '';
 // Hook coreográfico: comando opaco a ejecutar cuando una fila analyze=1 pasa a 'sent'.
@@ -226,10 +228,11 @@ function startTtsServer() {
   const server = http.createServer((req, res) => {
     const filename = path.basename(req.url);
     const tipo     = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav' }[path.extname(filename)];
-    if (!filename.startsWith('notifier_tts_') || !tipo) {
+    const esChime  = filename === path.basename(WIIM_CHIME);
+    if (!(filename.startsWith('notifier_tts_') || esChime) || !tipo) {
       res.writeHead(404); res.end(); return;
     }
-    const filepath = path.join(os.tmpdir(), filename);
+    const filepath = esChime ? WIIM_CHIME : path.join(os.tmpdir(), filename);
     if (!fs.existsSync(filepath)) { res.writeHead(404); res.end(); return; }
     const size = fs.statSync(filepath).size;
     res.writeHead(200, { 'Content-Type': tipo, 'Content-Length': size });
@@ -343,27 +346,64 @@ async function sendGoogleHome(message) {
 }
 
 // ── WiiM ──────────────────────────────────────────────────────────────────────
-// setPlayerCmd:play corta lo que esté sonando y no lo retoma: el aviso siempre se oye.
-// playPromptUrl (que baja la música y la retoma) se probó el 2026-09-26 y no suena ni
-// con el WiiM parado ni con música por Cast.
-async function sendWiim(message) {
-  const { filename, filepath } = await generateTts(message);
-  const audioUrl = `http://${getLocalIp()}:${TTS_PORT}/${filename}`;
-  log(`TTS url: ${audioUrl}`);
-  await new Promise((resolve, reject) => {
+// setPlayerCmd:play corta lo que esté sonando y no lo retoma. Por eso, si el WiiM está
+// tocando música, el aviso va al Google Home en su lugar. playPromptUrl (que baja la música
+// y la retoma) se probó el 2026-09-26 y no suena ni con el WiiM parado ni con música por Cast.
+function wiimCmd(command) {
+  return new Promise((resolve, reject) => {
     const req = https.get({
       hostname:           WIIM_HOST,
-      path:               `/httpapi.asp?command=setPlayerCmd:play:${audioUrl}`,
+      path:               `/httpapi.asp?command=${command}`,
       rejectUnauthorized: false,   // el WiiM usa un certificado autofirmado
       timeout:            10000
     }, (res) => {
       let data = '';
       res.on('data', c => data += c);
-      res.on('end', () => data.trim() === 'OK' ? resolve() : reject(new Error(`WiiM respondió: ${data.trim().slice(0, 100)}`)));
+      res.on('end', () => resolve(data.trim()));
     });
     req.on('timeout', () => req.destroy(new Error('WiiM: timeout 10000ms')));
     req.on('error', reject);
   });
+}
+
+async function wiimPlay(url) {
+  const r = await wiimCmd(`setPlayerCmd:play:${url}`);
+  if (r !== 'OK') throw new Error(`WiiM respondió: ${r.slice(0, 100)}`);
+}
+
+async function wiimEstado() {
+  return JSON.parse(await wiimCmd('getPlayerStatus'));
+}
+
+// Espera a que termine lo que se mandó a sonar (tope: maxMs).
+async function wiimEsperarFin(maxMs) {
+  const inicio = Date.now();
+  const pausa  = ms => new Promise(r => setTimeout(r, ms));
+  await pausa(800);
+  while (Date.now() - inicio < maxMs) {
+    const { status } = await wiimEstado();
+    if (status !== 'play' && status !== 'load') return;
+    await pausa(300);
+  }
+}
+
+async function sendWiim(message) {
+  // 'CustomPushUrl' es un aviso anterior del propio notifier, no música del usuario.
+  const estado = await wiimEstado();
+  if (estado.status === 'play' && estado.vendor !== 'CustomPushUrl') {
+    log(`wiim: tocando música (${estado.vendor || 'sin fuente'}) → google_home`);
+    return sendGoogleHome(message);
+  }
+  const { filename, filepath } = await generateTts(message);
+  const base = `http://${getLocalIp()}:${TTS_PORT}`;
+  log(`TTS url: ${base}/${filename}`);
+  if (fs.existsSync(WIIM_CHIME)) {
+    await wiimPlay(`${base}/${path.basename(WIIM_CHIME)}`);
+    await wiimEsperarFin(8000);
+  } else {
+    log(`wiim: sin chime (no existe ${WIIM_CHIME})`);
+  }
+  await wiimPlay(`${base}/${filename}`);
   log(`wiim: ok ${WIIM_HOST}`);
   // El WiiM puede leer el archivo de a poco mientras suena: se borra más tarde que en Google Home.
   setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 5 * 60 * 1000);
