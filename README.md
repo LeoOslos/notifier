@@ -168,6 +168,7 @@ La prioridad controla tanto el **orden de despacho** (menor número = sale antes
 Aplica a todas las luces LIFX de la casa:
 - Luces con soporte de color: cambian al color del modo
 - Luces solo blancas (`bathroom_lamp`, `shelf_lamp`): pulsan en brillo sin cambio de color
+- Luces apagadas: se prenden para el efecto y al terminar se vuelven a apagar; las prendidas vuelven a su color previo (`power_on: true` de `lifx.effect_pulse`, lo restaura `aiolifx_effects`)
 
 En DND: se skipea igual que `google_home`.
 

@@ -27,16 +27,16 @@ WHITE_LIGHTS = [
 
 MODES = {
     'alert': {
-        'color': {'mode': 'blink', 'period': 0.3, 'cycles': 3, 'color_name': 'red',  'brightness_pct': 50, 'power_on': False},
-        'white': {'mode': 'blink', 'period': 0.3, 'cycles': 3,                        'brightness_pct': 50, 'power_on': False},
+        'color': {'mode': 'blink', 'period': 0.3, 'cycles': 3, 'color_name': 'red',  'brightness_pct': 50, 'power_on': True},
+        'white': {'mode': 'blink', 'period': 0.3, 'cycles': 3,                        'brightness_pct': 50, 'power_on': True},
     },
     'pulse': {
-        'color': {'mode': 'breathe', 'period': 0.35, 'cycles': 1, 'color_name': 'red',  'brightness_pct': 25, 'power_on': False},
-        'white': {'mode': 'breathe', 'period': 0.35, 'cycles': 1,                        'brightness_pct': 25, 'power_on': False},
+        'color': {'mode': 'breathe', 'period': 0.35, 'cycles': 1, 'color_name': 'red',  'brightness_pct': 25, 'power_on': True},
+        'white': {'mode': 'breathe', 'period': 0.35, 'cycles': 1,                        'brightness_pct': 25, 'power_on': True},
     },
     'info': {
-        'color': {'mode': 'breathe', 'period': 1.2, 'cycles': 1, 'color_name': 'blue', 'brightness_pct': 15, 'power_on': False},
-        'white': {'mode': 'breathe', 'period': 1.2, 'cycles': 1,                        'brightness_pct': 15, 'power_on': False},
+        'color': {'mode': 'breathe', 'period': 1.2, 'cycles': 1, 'color_name': 'blue', 'brightness_pct': 15, 'power_on': True},
+        'white': {'mode': 'breathe', 'period': 1.2, 'cycles': 1,                        'brightness_pct': 15, 'power_on': True},
     },
 }
 
