@@ -35,6 +35,8 @@ const WIIM_CHIME           = process.env.WIIM_CHIME         || path.join(__dirna
 const WIIM_RELLENO_MS      = parseInt(process.env.WIIM_RELLENO_MS || '1500');
 const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
 const HA_TOKEN             = process.env.HA_TOKEN           || '';
+// wiim-dashboard corre luces-musica (las LIFX siguen la música) y dice si está prendido (BL-215).
+const LUCES_MUSICA_URL     = process.env.LUCES_MUSICA_URL   || 'http://localhost:8080/api/luces';
 // Hook coreográfico: comando opaco a ejecutar cuando una fila analyze=1 pasa a 'sent'.
 // Default vacío = no-op. notifier no sabe qué hay del otro lado (ver analyzer agent).
 const ANALYZE_HOOK_CMD     = process.env.ANALYZE_HOOK_CMD   || '';
@@ -315,7 +317,27 @@ async function generateTts(message) {
   return { filename, filepath };
 }
 
-async function sendLights(priority) {
+// Si no responde, el dashboard está caído y luces-musica con él (es su subproceso): false.
+function lucesSiguenMusica() {
+  return new Promise(resolve => {
+    const req = http.get(LUCES_MUSICA_URL, { timeout: 3000 }, res => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(body).prendidas === true); } catch { resolve(false); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', err => { log(`lights: no se pudo consultar luces-musica (${err.message})`); resolve(false); });
+  });
+}
+
+// Con luces-musica prendido un pulso no se distingue de la música: el aviso va por Telegram.
+async function sendLights(priority, enviarTelegram) {
+  if (await lucesSiguenMusica()) {
+    log('lights: las luces siguen la música → telegram');
+    return enviarTelegram();
+  }
   const { exec } = require('child_process');
   const scriptPath = path.join(__dirname, 'cast_lights.py');
   await new Promise((resolve, reject) => {
@@ -479,13 +501,12 @@ async function processBatch(db) {
     try {
       const ts   = fmtTime(row.created_at);
       const tags = etiquetas(row.source);
-      if (row.channel === 'telegram') {
-        const silent = row.silent || isDndTime();
-        await sendTelegram(`[${ts}] ${prefijarTexto(row.message, tags, { html: true })}`, !!silent);
-      }
+      const telegram = () => sendTelegram(`[${ts}] ${prefijarTexto(row.message, tags, { html: true })}`,
+                                          !!(row.silent || isDndTime()));
+      if (row.channel === 'telegram')    await telegram();
       if (row.channel === 'google_home') await sendGoogleHome(prefijarVoz(row.message, tags));
       if (row.channel === 'wiim')        await sendWiim(prefijarVoz(row.message, tags));
-      if (row.channel === 'lights')      await sendLights(row.priority);
+      if (row.channel === 'lights')      await sendLights(row.priority, telegram);
       if (row.channel === 'email')       await sendEmail(row.email_to, prefijarTexto(row.email_subject || '(sin asunto)', tags), row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel} silent=${row.silent} source=${tags.proceso}${tags.esPrueba ? ' PRUEBA' : ''}`);
