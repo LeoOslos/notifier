@@ -30,6 +30,9 @@ const GOOGLE_HOME_DEVICE   = process.env.GOOGLE_HOME_DEVICE || '';
 const WIIM_HOST            = process.env.WIIM_HOST          || '192.168.1.147';
 // Sonido previo al aviso en el WiiM (fuera de Git: ver README). Si no existe, el aviso sale sin él.
 const WIIM_CHIME           = process.env.WIIM_CHIME         || path.join(__dirname, 'sonidos', 'chime.mp3');
+// El WiiM deja de sonar ~0,75 s antes del final del archivo (medido con getPlayerStatus, BL-216) y
+// Gemini deja solo 80-320 ms de silencio al final: sin relleno se come la última palabra.
+const WIIM_RELLENO_MS      = parseInt(process.env.WIIM_RELLENO_MS || '1500');
 const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
 const HA_TOKEN             = process.env.HA_TOKEN           || '';
 // Hook coreográfico: comando opaco a ejecutar cuando una fila analyze=1 pasa a 'sent'.
@@ -366,6 +369,28 @@ function wiimCmd(command) {
   });
 }
 
+// Agrega `ms` de silencio al final de un WAV PCM y corrige los tamaños del encabezado.
+// Recorre los chunks (Piper y Gemini no escriben el mismo encabezado) y exige que `data` sea el último.
+function rellenarWav(buf, ms) {
+  if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') throw new Error('no es WAV');
+  let off = 12, fmt = null;
+  while (off + 8 <= buf.length) {
+    const id = buf.toString('ascii', off, off + 4), size = buf.readUInt32LE(off + 4);
+    if (id === 'fmt ') fmt = { rate: buf.readUInt32LE(off + 12), blockAlign: buf.readUInt16LE(off + 20) };
+    if (id === 'data') {
+      if (!fmt) throw new Error('WAV sin fmt antes de data');
+      if (off + 8 + size !== buf.length) throw new Error('el chunk data no es el último');
+      const silencio = Buffer.alloc(Math.round(fmt.rate * ms / 1000) * fmt.blockAlign);
+      const out = Buffer.concat([buf, silencio]);
+      out.writeUInt32LE(size + silencio.length, off + 4);
+      out.writeUInt32LE(out.length - 8, 4);
+      return out;
+    }
+    off += 8 + size + (size % 2);
+  }
+  throw new Error('WAV sin chunk data');
+}
+
 async function wiimPlay(url) {
   const r = await wiimCmd(`setPlayerCmd:play:${url}`);
   if (r !== 'OK') throw new Error(`WiiM respondió: ${r.slice(0, 100)}`);
@@ -395,6 +420,11 @@ async function sendWiim(message) {
     return sendGoogleHome(message);
   }
   const { filename, filepath } = await generateTts(message);
+  try {
+    fs.writeFileSync(filepath, rellenarWav(fs.readFileSync(filepath), WIIM_RELLENO_MS));
+  } catch (err) {
+    log(`wiim: no se pudo agregar silencio al final (${err.message}); puede cortarse la última palabra`);
+  }
   const base = `http://${getLocalIp()}:${TTS_PORT}`;
   log(`TTS url: ${base}/${filename}`);
   if (fs.existsSync(WIIM_CHIME)) {
@@ -504,4 +534,4 @@ function main() {
 if (require.main === module) main();
 
 // Exportado solo para los tests de etiquetado (test_etiquetas.js).
-module.exports = { etiquetas, prefijarTexto, prefijarVoz, yaEtiquetado, generateTts };
+module.exports = { etiquetas, prefijarTexto, prefijarVoz, yaEtiquetado, generateTts, rellenarWav, wavDePcm };

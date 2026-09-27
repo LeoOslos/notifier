@@ -205,6 +205,10 @@ Otras voces de Gemini: `GEMINI_TTS_VOICE` (Charon, Puck, …). Otro modelo de Pi
   El chime no está en Git (la licencia de Mixkit no permite redistribuirlo suelto); se baja con
   `mkdir -p sonidos && curl -sfL -o sonidos/chime.mp3 https://assets.mixkit.co/active_storage/sfx/914/914-preview.mp3`
   («Happy bells notification», Mixkit). Si falta, el aviso sale sin chime.
+- **Silencio al final (`WIIM_RELLENO_MS`, default 1500):** el WiiM deja de sonar ~0,75 s antes del
+  final del archivo (medido con `getPlayerStatus`: `curpos` no pasa de `totlen − 750 ms`), y Gemini
+  deja solo 80-320 ms de silencio al final, así que sin relleno se comía la última palabra (BL-216).
+  Se agrega al WAV solo en este canal; el Google Home no lo necesita. Tests: `node test_wav.js`.
 - En DND: `skipped`, igual que `google_home`.
 
 ### email
