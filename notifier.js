@@ -35,8 +35,10 @@ const WIIM_CHIME           = process.env.WIIM_CHIME         || path.join(__dirna
 const WIIM_RELLENO_MS      = parseInt(process.env.WIIM_RELLENO_MS || '1500');
 const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
 const HA_TOKEN             = process.env.HA_TOKEN           || '';
-// wiim-dashboard corre luces-musica (las LIFX siguen la música) y dice si está prendido (BL-215).
-const LUCES_MUSICA_URL     = process.env.LUCES_MUSICA_URL   || 'http://localhost:8080/api/luces';
+// luces-musica tiene tomado este flock mientras las LIFX siguen la música (su contrato, BL-215).
+const LUCES_MUSICA_LOCK    = process.env.LUCES_MUSICA_LOCK  || path.join(os.homedir(), 'luces-musica', 'datos', 'corriendo.lock');
+// Un aviso a varios canales son filas sueltas: se reconoce la de Telegram por source+texto+hora.
+const MISMO_AVISO_S        = 60;
 // Hook coreográfico: comando opaco a ejecutar cuando una fila analyze=1 pasa a 'sent'.
 // Default vacío = no-op. notifier no sabe qué hay del otro lado (ver analyzer agent).
 const ANALYZE_HOOK_CMD     = process.env.ANALYZE_HOOK_CMD   || '';
@@ -317,24 +319,23 @@ async function generateTts(message) {
   return { filename, filepath };
 }
 
-// Si no responde, el dashboard está caído y luces-musica con él (es su subproceso): false.
+// flock -n sale con 10 (-E) solo si el candado está tomado; cualquier otra falla cuenta como que no.
 function lucesSiguenMusica() {
+  if (!fs.existsSync(LUCES_MUSICA_LOCK)) return Promise.resolve(false);
+  const { execFile } = require('child_process');
   return new Promise(resolve => {
-    const req = http.get(LUCES_MUSICA_URL, { timeout: 3000 }, res => {
-      let body = '';
-      res.on('data', c => body += c);
-      res.on('end', () => {
-        try { resolve(JSON.parse(body).prendidas === true); } catch { resolve(false); }
-      });
+    execFile('flock', ['-n', '-E', '10', LUCES_MUSICA_LOCK, 'true'], { timeout: 3000 }, err => {
+      if (err && err.code !== 10) log(`lights: no se pudo consultar luces-musica (${err.message})`);
+      resolve(!!err && err.code === 10);
     });
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', err => { log(`lights: no se pudo consultar luces-musica (${err.message})`); resolve(false); });
   });
 }
 
-// Con luces-musica prendido un pulso no se distingue de la música: el aviso va por Telegram.
-async function sendLights(priority, enviarTelegram) {
+// Con luces-musica prendido un pulso no se distingue de la música: el aviso va por Telegram,
+// salvo que ya vaya por ahí (yaVaPorTelegram).
+async function sendLights(priority, enviarTelegram, yaVaPorTelegram) {
   if (await lucesSiguenMusica()) {
+    if (yaVaPorTelegram()) return log('lights: las luces siguen la música y el aviso ya va por telegram → nada');
     log('lights: las luces siguen la música → telegram');
     return enviarTelegram();
   }
@@ -506,7 +507,10 @@ async function processBatch(db) {
       if (row.channel === 'telegram')    await telegram();
       if (row.channel === 'google_home') await sendGoogleHome(prefijarVoz(row.message, tags));
       if (row.channel === 'wiim')        await sendWiim(prefijarVoz(row.message, tags));
-      if (row.channel === 'lights')      await sendLights(row.priority, telegram);
+      if (row.channel === 'lights')      await sendLights(row.priority, telegram, () => !!db.prepare(`
+        SELECT 1 FROM queue WHERE channel = 'telegram' AND source = ? AND message = ?
+          AND abs(strftime('%s', created_at) - strftime('%s', ?)) <= ? LIMIT 1
+      `).get(row.source, row.message, row.created_at, MISMO_AVISO_S));
       if (row.channel === 'email')       await sendEmail(row.email_to, prefijarTexto(row.email_subject || '(sin asunto)', tags), row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
       log(`sent id=${row.id} channel=${row.channel} silent=${row.silent} source=${tags.proceso}${tags.esPrueba ? ' PRUEBA' : ''}`);

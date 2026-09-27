@@ -169,7 +169,7 @@ Aplica a todas las luces LIFX de la casa:
 - Luces con soporte de color: cambian al color del modo
 - Luces solo blancas (`bathroom_lamp`, `shelf_lamp`): pulsan en brillo sin cambio de color
 - Luces apagadas: se prenden para el efecto y al terminar se vuelven a apagar; las prendidas vuelven a su color previo (`power_on: true` de `lifx.effect_pulse`, lo restaura `aiolifx_effects`)
-- Si luces-musica está prendido (las luces siguen la música, `GET /api/luces` de wiim-dashboard, `LUCES_MUSICA_URL`), el aviso va por **Telegram** en vez de las luces: un pulso no se distinguiría de la música. Si el dashboard no responde, luces-musica tampoco corre (es su subproceso) y el aviso va a las luces
+- Si las luces están siguiendo la música (luces-musica tiene tomado el `flock` de `~/luces-musica/datos/corriendo.lock`, `LUCES_MUSICA_LOCK`), el aviso va por **Telegram** en vez de las luces: un pulso no se distinguiría de la música. Si el mismo aviso ya va por Telegram (fila `telegram` con igual `source` y texto, encolada a menos de 60 s), no se repite
 
 En DND: se skipea igual que `google_home`.
 
