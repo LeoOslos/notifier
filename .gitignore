@@ -4,6 +4,7 @@ logs/
 queue.db
 queue.db-shm
 queue.db-wal
+notifier.db
 __pycache__/
 piper-venv/
 voces/
