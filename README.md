@@ -61,7 +61,7 @@ GEMINI_API_KEY=...            # voz principal (Gemini TTS). Sin clave → siempr
 PIPER_LENGTH_SCALE=1.5        # velocidad de la voz de respaldo (>1 = más lenta)
 GOOGLE_HOME_DEVICE=Mini       # substring del nombre del dispositivo. Vacío = todos.
 GOOGLE_HOME_VOLUMEN=0.5       # volumen de los avisos en Cast (0-1). Vacío = no tocarlo
-WIIM_VOLUMEN=25               # volumen de los avisos en el WiiM (1-100). Vacío = no tocarlo
+WIIM_VOLUMEN=40               # volumen de los avisos en el WiiM (1-100). Vacío = no tocarlo
 POLL_INTERVAL=2000
 MAX_RETRIES=3
 BATCH_SIZE=10
@@ -201,7 +201,7 @@ HA_TOKEN=<long-lived access token de Home Assistant>
 el mute y se fija el volumen de aviso; al terminar de hablar se devuelve el volumen y el mute que
 había. Así el aviso no sale mudo ni a todo volumen según cómo quedó el parlante. El log lo dice:
 `cast: volumen Mini: 0.30 -> 0.50` … `cast: volumen Mini: devuelto a 0.30` (en el WiiM,
-`wiim: volumen 40 → 25` … `wiim: volumen devuelto a 40`). Mientras habla, la cola espera (tope 60 s).
+`wiim: volumen 23 → 40` … `wiim: volumen devuelto a 23`). Mientras habla, la cola espera (tope 60 s).
 
 Otras voces de Gemini: `GEMINI_TTS_VOICE` (Charon, Puck, …). Otro modelo de Piper: `PIPER_MODEL`.
 

@@ -36,7 +36,7 @@ const WIIM_RELLENO_MS      = parseInt(process.env.WIIM_RELLENO_MS || '1500');
 // Volumen de los avisos por voz (BL-237): se fija antes de hablar (sacando el mute) y al terminar
 // se devuelve el que había. Vacío = no tocar el volumen.
 const GOOGLE_HOME_VOLUMEN  = process.env.GOOGLE_HOME_VOLUMEN ?? '0.5';   // 0-1, escala de Cast
-const WIIM_VOLUMEN         = process.env.WIIM_VOLUMEN        ?? '25';    // 0-100, escala del WiiM
+const WIIM_VOLUMEN         = process.env.WIIM_VOLUMEN        ?? '40';    // 0-100, escala del WiiM
 const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
 const HA_TOKEN             = process.env.HA_TOKEN           || '';
 // luces-musica tiene tomado este flock mientras las LIFX siguen la música (su contrato, BL-215).
