@@ -33,6 +33,10 @@ const WIIM_CHIME           = process.env.WIIM_CHIME         || path.join(__dirna
 // El WiiM deja de sonar ~0,75 s antes del final del archivo (medido con getPlayerStatus, BL-216) y
 // Gemini deja solo 80-320 ms de silencio al final: sin relleno se come la última palabra.
 const WIIM_RELLENO_MS      = parseInt(process.env.WIIM_RELLENO_MS || '1500');
+// Volumen de los avisos por voz (BL-237): se fija antes de hablar (sacando el mute) y al terminar
+// se devuelve el que había. Vacío = no tocar el volumen.
+const GOOGLE_HOME_VOLUMEN  = process.env.GOOGLE_HOME_VOLUMEN ?? '0.5';   // 0-1, escala de Cast
+const WIIM_VOLUMEN         = process.env.WIIM_VOLUMEN        ?? '25';    // 0-100, escala del WiiM
 const HA_URL               = process.env.HA_URL             || 'http://localhost:8123';
 const HA_TOKEN             = process.env.HA_TOKEN           || '';
 // luces-musica tiene tomado este flock mientras las LIFX siguen la música (su contrato, BL-215).
@@ -361,7 +365,9 @@ async function sendGoogleHome(message) {
   const scriptPath   = path.join(__dirname, 'cast_google_home.py');
   const deviceArg    = GOOGLE_HOME_DEVICE ? ` "${GOOGLE_HOME_DEVICE}"` : '';
   await new Promise((resolve, reject) => {
-    exec(`python3 "${scriptPath}" "${audioUrl}"${deviceArg}`, { timeout: 60000 }, (err, stdout, stderr) => {
+    // Con volumen, el script espera el fin del aviso para devolver el volumen anterior.
+    const env = { ...process.env, VOZ_VOLUMEN: GOOGLE_HOME_VOLUMEN };
+    exec(`python3 "${scriptPath}" "${audioUrl}"${deviceArg}`, { timeout: 120000, env }, (err, stdout, stderr) => {
       if (stdout) stdout.trim().split('\n').forEach(l => log(`cast: ${l}`));
       if (err) reject(new Error(stderr.trim() || err.message));
       else resolve();
@@ -435,6 +441,27 @@ async function wiimEsperarFin(maxMs) {
   }
 }
 
+// Saca el mute y fija WIIM_VOLUMEN. Devuelve lo que había, para wiimDevolverVolumen.
+async function wiimFijarVolumen(estado) {
+  const vol = parseInt(WIIM_VOLUMEN, 10);
+  if (!(vol > 0 && vol <= 100)) throw new Error(`WIIM_VOLUMEN fuera de rango (1-100): ${WIIM_VOLUMEN}`);
+  const previo = { vol: estado.vol, mute: estado.mute };
+  if (previo.mute !== '0') await wiimCmd('setPlayerCmd:mute:0');
+  await wiimCmd(`setPlayerCmd:vol:${vol}`);
+  log(`wiim: volumen ${previo.vol}${previo.mute !== '0' ? ' mute' : ''} → ${vol}`);
+  return previo;
+}
+
+async function wiimDevolverVolumen({ vol, mute }) {
+  try {
+    await wiimCmd(`setPlayerCmd:vol:${vol}`);
+    if (mute !== '0') await wiimCmd('setPlayerCmd:mute:1');
+    log(`wiim: volumen devuelto a ${vol}${mute !== '0' ? ' mute' : ''}`);
+  } catch (err) {
+    log(`wiim: no se pudo devolver el volumen (${err.message})`);
+  }
+}
+
 async function sendWiim(message) {
   // 'CustomPushUrl' es un aviso anterior del propio notifier, no música del usuario.
   const estado = await wiimEstado();
@@ -450,14 +477,20 @@ async function sendWiim(message) {
   }
   const base = `http://${getLocalIp()}:${TTS_PORT}`;
   log(`TTS url: ${base}/${filename}`);
-  if (fs.existsSync(WIIM_CHIME)) {
-    await wiimPlay(`${base}/${path.basename(WIIM_CHIME)}`);
-    await wiimEsperarFin(8000);
-  } else {
-    log(`wiim: sin chime (no existe ${WIIM_CHIME})`);
+  const previo = WIIM_VOLUMEN ? await wiimFijarVolumen(estado) : null;
+  try {
+    if (fs.existsSync(WIIM_CHIME)) {
+      await wiimPlay(`${base}/${path.basename(WIIM_CHIME)}`);
+      await wiimEsperarFin(8000);
+    } else {
+      log(`wiim: sin chime (no existe ${WIIM_CHIME})`);
+    }
+    await wiimPlay(`${base}/${filename}`);
+    log(`wiim: ok ${WIIM_HOST}`);
+    if (previo) await wiimEsperarFin(60000);
+  } finally {
+    if (previo) await wiimDevolverVolumen(previo);
   }
-  await wiimPlay(`${base}/${filename}`);
-  log(`wiim: ok ${WIIM_HOST}`);
   // El WiiM puede leer el archivo de a poco mientras suena: se borra más tarde que en Google Home.
   setTimeout(() => { try { fs.unlinkSync(filepath); } catch {} }, 5 * 60 * 1000);
 }

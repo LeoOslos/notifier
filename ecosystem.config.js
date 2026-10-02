@@ -34,6 +34,8 @@ module.exports = {
       DND_CHANNELS:         env.DND_CHANNELS         || 'google_home,wiim',
       QUEUE_RETENTION_DAYS: env.QUEUE_RETENTION_DAYS || '30',
       GOOGLE_HOME_DEVICE:   env.GOOGLE_HOME_DEVICE   || '',
+      GOOGLE_HOME_VOLUMEN:  env.GOOGLE_HOME_VOLUMEN  ?? '0.5',
+      WIIM_VOLUMEN:         env.WIIM_VOLUMEN         ?? '25',
       HA_URL:               env.HA_URL               || 'http://localhost:8123',
       HA_TOKEN:             env.HA_TOKEN             || '',
       ANALYZE_HOOK_CMD:     env.ANALYZE_HOOK_CMD     || '',
