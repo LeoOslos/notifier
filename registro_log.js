@@ -1,4 +1,4 @@
-// registro_log.js — formato estándar de log para Node (plan: ~/PLAN-estandarizar-logs.md, Fase 8).
+// registro_log.js — formato estándar de log para Node (plan: ~/planes/PLAN-estandarizar-logs.md, Fase 8).
 //
 // PLANTILLA, hermana de registro_log.py y registro_log.sh: se COPIA a cada proyecto (regla 6 de arquitectura:
 // no se importa desde otro repo). Cambiar el formato es cambiar las tres plantillas, sus copias y logcron.py;

@@ -82,7 +82,7 @@ function fmtTime(createdAt) {
 }
 
 // ── Logging ───────────────────────────────────────────────────────────────────
-// Formato estándar (registro_log.js, ~/PLAN-estandarizar-logs.md). pm2 ya no le antepone fecha (`time: false`).
+// Formato estándar (registro_log.js, ~/planes/PLAN-estandarizar-logs.md). pm2 ya no le antepone fecha (`time: false`).
 // Nivel por el contenido, como ya estaban escritos los mensajes: los que dicen «error» van como ERROR.
 const _registro = require('./registro_log').crearLog('notifier');
 function log(msg) {
