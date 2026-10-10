@@ -156,12 +156,13 @@ function atrasado(row, ahora = new Date()) {
 }
 
 // Qué hacer con una fila cuyo envío falló: { status, retries, next_attempt_at }.
+// 'failed' = algo está roto (hay que arreglarlo); 'expired' = no hubo red a tiempo (nada que arreglar).
 function trasFalla(row, err, ahora = new Date()) {
   const retries = row.retries + 1;
   if (err && err.permanente && retries >= MAX_RETRIES) return { status: 'failed', retries, next_attempt_at: null, motivo: 'permanente' };
   const proximo = new Date(ahora.getTime() + esperaS(retries) * 1000);
   if (proximo - desdeSqlite(row.created_at) > vencimientoMs(row.channel)) {
-    return { status: 'failed', retries, next_attempt_at: null, motivo: 'vencido' };
+    return { status: 'expired', retries, next_attempt_at: null, motivo: 'vencido' };
   }
   return { status: 'pending', retries, next_attempt_at: aSqlite(proximo), motivo: null };
 }
@@ -557,7 +558,7 @@ async function sendWiim(message) {
 function purgeOldRecords(db) {
   const { changes } = db.prepare(`
     DELETE FROM queue
-    WHERE status IN ('sent', 'failed', 'skipped')
+    WHERE status IN ('sent', 'failed', 'skipped', 'expired')
       AND created_at < datetime('now', ? || ' days')
   `).run(`-${QUEUE_RETENTION_DAYS}`);
   if (changes > 0) log(`purge: eliminados ${changes} registros con más de ${QUEUE_RETENTION_DAYS} días`);
@@ -592,7 +593,7 @@ async function processBatch(db) {
     }
     // Encolado y nunca intentado a tiempo (p. ej. el notifier estuvo parado): mismo vencimiento que un reintento.
     if (vencido(row)) {
-      db.prepare(`UPDATE queue SET status='failed', next_attempt_at=NULL WHERE id=?`).run(row.id);
+      db.prepare(`UPDATE queue SET status='expired', next_attempt_at=NULL WHERE id=?`).run(row.id);
       log(`vencido id=${row.id} channel=${row.channel} source=${row.source} creado=${fmtTime(row.created_at)} — no se manda`);
       continue;
     }

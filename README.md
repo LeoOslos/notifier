@@ -282,9 +282,10 @@ después era falso. Por eso:
 Un corte corto (el caso común: se cae internet unos minutos) ya no pierde avisos —antes, «Cierre
 diario con errores» de cedears del 2026-10-02 quedó `failed` por un corte—; uno largo los
 pierde igual que antes, y lo que corresponde avisar al volver es **que volvió** (`power-monitor`
-y `boot-notify.sh`). Un aviso que vence queda `failed` con `vencido` en el log. Las fallas
+y `boot-notify.sh`). Un aviso que vence queda `expired` (no `failed`: no hay nada roto que
+arreglar, solo no hubo red a tiempo). Las fallas
 **permanentes** (Telegram 4xx salvo 429, mail sin credenciales o dirección inválida, SMTP 5xx)
-siguen cortando en `MAX_RETRIES`.
+siguen cortando en `MAX_RETRIES` y quedan `failed`.
 
 Consecuencia para el que llama: **si un aviso tiene que sobrevivir a un corte largo, la cola
 del notifier no es el lugar.** Eso es estado, y va a un archivo o a una base que el proceso
@@ -304,7 +305,7 @@ Ojo con las horas: `created_at` se guarda en **UTC** y el log del servicio va en
 
 ## Depuración de la cola
 
-Los registros con status `sent`, `failed` o `skipped` se eliminan automáticamente al arrancar el servicio y cada hora. Retención configurable en `.env`:
+Los registros con status `sent`, `failed`, `skipped` o `expired` se eliminan automáticamente al arrancar el servicio y cada hora. Retención configurable en `.env`:
 
 ```env
 QUEUE_RETENTION_DAYS=30
@@ -324,7 +325,7 @@ CREATE TABLE queue (
   analyze    INTEGER NOT NULL DEFAULT 0,   -- 1=dispara hook de análisis al pasar a 'sent'
   source     TEXT    NOT NULL DEFAULT 'unknown',  -- qué proceso encoló: se estampa en la entrega
                                                  -- y da contexto al analyzer. Sufijo '/prueba' → [PRUEBA]
-  status     TEXT    NOT NULL DEFAULT 'pending',  -- pending | sent | failed
+  status     TEXT    NOT NULL DEFAULT 'pending',  -- pending | sent | failed | skipped | expired
   retries    INTEGER NOT NULL DEFAULT 0,
   next_attempt_at TEXT,                    -- UTC; NULL = se puede mandar ya (reintento con espera)
   email_to      TEXT NOT NULL DEFAULT '',  -- destinatario (solo canal email)
@@ -377,6 +378,7 @@ Entradas relevantes:
 - `cast: ok NombreDispositivo` — Cast exitoso
 - `cast: error NombreDispositivo: ...` — falló ese dispositivo (otros pueden haber funcionado)
 - `error id=N retries=M status=pending próximo intento ... UTC` — falló, se reintenta
-- `error id=N retries=M status=failed (vencido|permanente)` — no se entrega más
+- `error id=N retries=M status=failed (permanente)` — no se entrega más: algo está roto
+- `error id=N retries=M status=expired (vencido)` — no se entrega más: no hubo red a tiempo
 - `vencido id=N` — llegó a su turno ya vencido (p. ej. el notifier estuvo parado)
 - `sent id=N ... atrasado creado=dd/mm HH:MM` — entregado con atraso

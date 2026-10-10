@@ -54,13 +54,13 @@ test('sin red, telegram sigue pendiente aunque pase MAX_RETRIES', () => {
 test('sin red, telegram vence a las 3 h', () => {
   assert.strictEqual(trasFalla(fila('telegram', 2 * 60), red, ahora).status, 'pending');
   const t = trasFalla(fila('telegram', 3 * 60 - 0.1), red, ahora);
-  assert.deepStrictEqual([t.status, t.motivo], ['failed', 'vencido']);
+  assert.deepStrictEqual([t.status, t.motivo], ['expired', 'vencido']);
 });
 
 test('voz y luces vencen a los 30 min', () => {
   for (const c of ['google_home', 'wiim', 'lights']) {
     assert.strictEqual(trasFalla(fila(c, 5), red, ahora).status, 'pending', c);
-    assert.strictEqual(trasFalla(fila(c, 29.9, 3), red, ahora).status, 'failed', c);
+    assert.strictEqual(trasFalla(fila(c, 29.9, 3), red, ahora).status, 'expired', c);
   }
 });
 
