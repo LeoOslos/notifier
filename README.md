@@ -283,7 +283,9 @@ Un corte corto (el caso común: se cae internet unos minutos) ya no pierde aviso
 diario con errores» de cedears del 2026-10-02 quedó `failed` por un corte—; uno largo los
 pierde igual que antes, y lo que corresponde avisar al volver es **que volvió** (`power-monitor`
 y `boot-notify.sh`). Un aviso que vence queda `expired` (no `failed`: no hay nada roto que
-arreglar, solo no hubo red a tiempo). Las fallas
+arreglar, solo no hubo red a tiempo). El motivo concreto queda en `last_error`, el mensaje del
+último intento (`getaddrinfo EAI_AGAIN …` = sin red, `WiiM: timeout …` = parlante inalcanzable,
+`Telegram: Bad Request (400)` = rechazado). Las fallas
 **permanentes** (Telegram 4xx salvo 429, mail sin credenciales o dirección inválida, SMTP 5xx)
 siguen cortando en `MAX_RETRIES` y quedan `failed`.
 
@@ -293,11 +295,11 @@ relea al arrancar.
 
 Tests: `node test_reintentos.js` (corre `processBatch` real sin red contra una cola temporal).
 
-Los `failed` quedan en la cola como evidencia hasta que los borra la depuración
+Los `failed` y `expired` quedan en la cola como evidencia hasta que los borra la depuración
 (`QUEUE_RETENTION_DAYS`); para verlos:
 
 ```bash
-sqlite3 ~/notifier/queue.db "select id, created_at, source, substr(message,1,60) from queue where status='failed' order by id desc limit 10;"
+sqlite3 ~/notifier/queue.db "select id, created_at, status, source, last_error, substr(message,1,60) from queue where status in ('failed','expired') order by id desc limit 10;"
 ```
 
 Ojo con las horas: `created_at` se guarda en **UTC** y el log del servicio va en hora local
@@ -328,6 +330,7 @@ CREATE TABLE queue (
   status     TEXT    NOT NULL DEFAULT 'pending',  -- pending | sent | failed | skipped | expired
   retries    INTEGER NOT NULL DEFAULT 0,
   next_attempt_at TEXT,                    -- UTC; NULL = se puede mandar ya (reintento con espera)
+  last_error TEXT,                         -- mensaje del último intento fallido
   email_to      TEXT NOT NULL DEFAULT '',  -- destinatario (solo canal email)
   email_subject TEXT NOT NULL DEFAULT '',  -- asunto (solo canal email)
   created_at TEXT    NOT NULL DEFAULT (datetime('now')),

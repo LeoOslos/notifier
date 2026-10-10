@@ -130,6 +130,8 @@ function initDb() {
   try { db.exec(`ALTER TABLE queue ADD COLUMN email_subject TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   // UTC como created_at. NULL = se puede mandar ya.
   try { db.exec(`ALTER TABLE queue ADD COLUMN next_attempt_at TEXT`); } catch (_) {}
+  // Mensaje del último intento fallido: dice por qué un aviso quedó failed/expired.
+  try { db.exec(`ALTER TABLE queue ADD COLUMN last_error TEXT`); } catch (_) {}
   return db;
 }
 
@@ -593,7 +595,8 @@ async function processBatch(db) {
     }
     // Encolado y nunca intentado a tiempo (p. ej. el notifier estuvo parado): mismo vencimiento que un reintento.
     if (vencido(row)) {
-      db.prepare(`UPDATE queue SET status='expired', next_attempt_at=NULL WHERE id=?`).run(row.id);
+      db.prepare(`UPDATE queue SET status='expired', next_attempt_at=NULL,
+                  last_error=coalesce(last_error, 'vencido antes del primer intento') WHERE id=?`).run(row.id);
       log(`vencido id=${row.id} channel=${row.channel} source=${row.source} creado=${fmtTime(row.created_at)} — no se manda`);
       continue;
     }
@@ -621,8 +624,8 @@ async function processBatch(db) {
       if (row.analyze) fireAnalyzeHook(row.id);
     } catch (err) {
       const t = trasFalla(row, err);
-      db.prepare(`UPDATE queue SET retries=?, status=?, next_attempt_at=? WHERE id=?`)
-        .run(t.retries, t.status, t.next_attempt_at, row.id);
+      db.prepare(`UPDATE queue SET retries=?, status=?, next_attempt_at=?, last_error=? WHERE id=?`)
+        .run(t.retries, t.status, t.next_attempt_at, String(err.message).slice(0, 300), row.id);
       const sigue = t.status === 'pending' ? `próximo intento ${t.next_attempt_at} UTC` : `(${t.motivo})`;
       log(`error id=${row.id} retries=${t.retries} status=${t.status} ${sigue} — ${err.message}`);
     }

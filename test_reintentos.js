@@ -89,6 +89,7 @@ test('processBatch sin red: la fila queda pendiente con próximo intento, no fai
     assert.strictEqual(row.status, 'pending');
     assert.strictEqual(row.retries, 1);
     assert.ok(row.next_attempt_at, 'sin next_attempt_at');
+    assert.match(row.last_error, /EAI_AGAIN/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
