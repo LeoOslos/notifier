@@ -63,7 +63,12 @@ GOOGLE_HOME_DEVICE=Mini       # substring del nombre del dispositivo. Vacío = t
 GOOGLE_HOME_VOLUMEN=0.5       # volumen de los avisos en Cast (0-1). Vacío = no tocarlo
 WIIM_VOLUMEN=40               # volumen de los avisos en el WiiM (1-100). Vacío = no tocarlo
 POLL_INTERVAL=2000
-MAX_RETRIES=3
+MAX_RETRIES=3                 # solo fallas permanentes; las de red se reintentan hasta vencer
+REINTENTO_BASE_S=30           # espera creciente entre reintentos, de 30 s…
+REINTENTO_MAX_S=900           # …hasta 15 min
+VENCIMIENTO_TEXTO_H=3         # telegram/email sin entregar a las 3 h → failed
+VENCIMIENTO_AL_OIDO_MIN=30    # google_home/wiim/lights: a los 30 min
+ATRASO_MIN=10                 # desde cuánto atraso la entrega dice «atrasado»
 BATCH_SIZE=10
 
 # Email (canal email)
@@ -255,25 +260,37 @@ No tocan la cola de producción: el primero importa `notifier.js` sin arrancar e
 
 `google_home` en DND se marca `skipped` inmediatamente — no se entrega nunca, queda como evidencia en la cola. No hay catarata de mensajes al salir del DND.
 
-## Un aviso que no se pudo entregar no se entrega después
+## Un aviso que no salió: se reintenta un rato, después vence
 
-`MAX_RETRIES=3` reintentos con `POLL_INTERVAL` de por medio y, si no salió, el aviso queda
-`failed` en la cola **para siempre**: nadie lo reencola cuando la red vuelve. Es el
-comportamiento buscado, por la misma razón que el `skipped` del DND — **un aviso
-describe el estado del momento en que se encoló, y entregarlo tarde informa mal**.
+Desde BL-279 (2026-10-10), una falla **transitoria** —sin red, timeout, 5xx, 429— no gasta
+`MAX_RETRIES`: el aviso queda `pending` y se reintenta con espera creciente (30 s, 60 s,
+120 s… tope `REINTENTO_MAX_S`=15 min, columna `next_attempt_at`) hasta que **vence**. Es el
+modelo de la cola de Postfix (`minimal/maximal_backoff_time` + `maximal_queue_lifetime`).
+Si sale con más de `ATRASO_MIN`=10 min de atraso, la entrega lo dice: `⏰ atrasado` en
+Telegram, `[atrasado]` en el asunto del mail, «aviso atrasado, de las HH:MM» en la voz.
 
-El caso que lo muestra es el corte de luz del 2026-09-22 (INC-2026-036), que dejó cuatro
-avisos en `failed` con `getaddrinfo ENOTFOUND api.telegram.org`: «corte de luz detectado»,
-«WAN caída», «eno1 sin ruta al gateway — requiere intervención manual» y «la sincronización
-de memoria viene fallando». Tres horas después los cuatro eran falsos, y el peor —el de
-`eno1`— habría mandado a intervenir a mano sobre algo que se resolvió solo al volver la luz.
-Lo que sí corresponde avisar cuando el servicio vuelve es **que volvió**, y de eso se encarga
-el aviso de recuperación de `power-monitor` (y el de arranque de `boot-notify.sh`), que se
-encolan con la red ya disponible.
+El vencimiento es corto a propósito: **un aviso describe el estado del momento en que se
+encoló, y entregarlo horas después informa mal**. El corte de luz del 2026-09-22
+(INC-2026-036) dejó «eno1 sin ruta al gateway — requiere intervención manual», que tres horas
+después era falso. Por eso:
 
-Consecuencia para el que llama: **si un aviso tiene que sobrevivir a una caída de red, la
-cola del notifier no es el lugar.** Eso es estado, y va a un archivo o a una base que el
-proceso relea al arrancar.
+| Canal | Vence a los | Variable |
+|---|---|---|
+| telegram, email | 3 h | `VENCIMIENTO_TEXTO_H` |
+| google_home, wiim, lights | 30 min | `VENCIMIENTO_AL_OIDO_MIN` |
+
+Un corte corto (el caso común: se cae internet unos minutos) ya no pierde avisos —antes, «Cierre
+diario con errores» de cedears del 2026-10-02 quedó `failed` por un corte—; uno largo los
+pierde igual que antes, y lo que corresponde avisar al volver es **que volvió** (`power-monitor`
+y `boot-notify.sh`). Un aviso que vence queda `failed` con `vencido` en el log. Las fallas
+**permanentes** (Telegram 4xx salvo 429, mail sin credenciales o dirección inválida, SMTP 5xx)
+siguen cortando en `MAX_RETRIES`.
+
+Consecuencia para el que llama: **si un aviso tiene que sobrevivir a un corte largo, la cola
+del notifier no es el lugar.** Eso es estado, y va a un archivo o a una base que el proceso
+relea al arrancar.
+
+Tests: `node test_reintentos.js` (corre `processBatch` real sin red contra una cola temporal).
 
 Los `failed` quedan en la cola como evidencia hasta que los borra la depuración
 (`QUEUE_RETENTION_DAYS`); para verlos:
@@ -309,6 +326,7 @@ CREATE TABLE queue (
                                                  -- y da contexto al analyzer. Sufijo '/prueba' → [PRUEBA]
   status     TEXT    NOT NULL DEFAULT 'pending',  -- pending | sent | failed
   retries    INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,                    -- UTC; NULL = se puede mandar ya (reintento con espera)
   email_to      TEXT NOT NULL DEFAULT '',  -- destinatario (solo canal email)
   email_subject TEXT NOT NULL DEFAULT '',  -- asunto (solo canal email)
   created_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -358,4 +376,7 @@ Entradas relevantes:
 - `dnd: skipped id=N` — en horario DND, descartado (no se reintenta)
 - `cast: ok NombreDispositivo` — Cast exitoso
 - `cast: error NombreDispositivo: ...` — falló ese dispositivo (otros pueden haber funcionado)
-- `error id=N retries=M status=failed` — agotó reintentos
+- `error id=N retries=M status=pending próximo intento ... UTC` — falló, se reintenta
+- `error id=N retries=M status=failed (vencido|permanente)` — no se entrega más
+- `vencido id=N` — llegó a su turno ya vencido (p. ej. el notifier estuvo parado)
+- `sent id=N ... atrasado creado=dd/mm HH:MM` — entregado con atraso

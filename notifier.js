@@ -15,6 +15,19 @@ const DB_PATH          = process.env.DB_PATH             || path.join(__dirname,
 const POLL_INTERVAL    = parseInt(process.env.POLL_INTERVAL || '2000');
 const MAX_RETRIES      = parseInt(process.env.MAX_RETRIES   || '3');
 const BATCH_SIZE       = parseInt(process.env.BATCH_SIZE    || '10');
+// Reintentos (BL-279). Una falla transitoria (sin red, timeout, 5xx, 429) no gasta MAX_RETRIES:
+// se reintenta con espera creciente hasta que vence el aviso, como la cola de Postfix
+// (minimal/maximal_backoff_time + maximal_queue_lifetime). MAX_RETRIES queda para las fallas
+// permanentes (token o dirección inválidos, mensaje rechazado), donde insistir no sirve.
+const REINTENTO_BASE_S     = parseInt(process.env.REINTENTO_BASE_S     || '30');
+const REINTENTO_MAX_S      = parseInt(process.env.REINTENTO_MAX_S      || '900');
+// Texto (telegram, email): sirve si llega algo tarde, no horas después (un aviso describe el estado
+// del momento; ver README, «Un aviso que no salió»). Voz y luces: solo si es casi en el momento.
+const VENCIMIENTO_TEXTO_H  = parseFloat(process.env.VENCIMIENTO_TEXTO_H || '3');
+const VENCIMIENTO_AL_OIDO_MIN = parseFloat(process.env.VENCIMIENTO_AL_OIDO_MIN || '30');
+const CANALES_AL_OIDO      = ['google_home', 'wiim', 'lights'];
+// Desde cuánto atraso la entrega lo dice (⏰ en el texto, «aviso atrasado» en la voz).
+const ATRASO_MIN           = parseFloat(process.env.ATRASO_MIN || '10');
 const TTS_PORT         = parseInt(process.env.TTS_PORT      || '9876');
 // Voz principal: Gemini TTS. Si falla por cualquier motivo (sin internet, cuota, API), Piper local.
 const GEMINI_API_KEY     = process.env.GEMINI_API_KEY       || '';
@@ -115,7 +128,42 @@ function initDb() {
   try { db.exec(`ALTER TABLE queue ADD COLUMN source TEXT NOT NULL DEFAULT 'unknown'`); } catch (_) {}
   try { db.exec(`ALTER TABLE queue ADD COLUMN email_to TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   try { db.exec(`ALTER TABLE queue ADD COLUMN email_subject TEXT NOT NULL DEFAULT ''`); } catch (_) {}
+  // UTC como created_at. NULL = se puede mandar ya.
+  try { db.exec(`ALTER TABLE queue ADD COLUMN next_attempt_at TEXT`); } catch (_) {}
   return db;
+}
+
+// ── Reintentos y atraso (BL-279) ──────────────────────────────────────────────
+// created_at y next_attempt_at son UTC de SQLite ('AAAA-MM-DD HH:MM:SS', sin zona).
+const desdeSqlite = s => new Date(s.replace(' ', 'T') + 'Z');
+const aSqlite     = d => d.toISOString().slice(0, 19).replace('T', ' ');
+
+// Espera antes del intento número `intento` (1 = el primero que falló): 30 s, 60 s, 120 s… tope 15 min.
+function esperaS(intento) {
+  return Math.min(REINTENTO_BASE_S * 2 ** Math.max(0, intento - 1), REINTENTO_MAX_S);
+}
+
+function vencimientoMs(channel) {
+  return CANALES_AL_OIDO.includes(channel) ? VENCIMIENTO_AL_OIDO_MIN * 60e3 : VENCIMIENTO_TEXTO_H * 3600e3;
+}
+
+function vencido(row, ahora = new Date()) {
+  return ahora - desdeSqlite(row.created_at) > vencimientoMs(row.channel);
+}
+
+function atrasado(row, ahora = new Date()) {
+  return ahora - desdeSqlite(row.created_at) > ATRASO_MIN * 60e3;
+}
+
+// Qué hacer con una fila cuyo envío falló: { status, retries, next_attempt_at }.
+function trasFalla(row, err, ahora = new Date()) {
+  const retries = row.retries + 1;
+  if (err && err.permanente && retries >= MAX_RETRIES) return { status: 'failed', retries, next_attempt_at: null, motivo: 'permanente' };
+  const proximo = new Date(ahora.getTime() + esperaS(retries) * 1000);
+  if (proximo - desdeSqlite(row.created_at) > vencimientoMs(row.channel)) {
+    return { status: 'failed', retries, next_attempt_at: null, motivo: 'vencido' };
+  }
+  return { status: 'pending', retries, next_attempt_at: aSqlite(proximo), motivo: null };
 }
 
 // ── Etiquetado de origen (regla de CLAUDE.md) ─────────────────────────────────
@@ -182,9 +230,14 @@ function sendTelegram(message, silent = true) {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        const parsed = JSON.parse(data);
-        if (parsed.ok) resolve();
-        else reject(new Error(`Telegram: ${parsed.description} (${parsed.error_code})`));
+        let parsed;
+        try { parsed = JSON.parse(data); }
+        catch (_) { return reject(new Error(`Telegram: respuesta no JSON (HTTP ${res.statusCode})`)); }
+        if (parsed.ok) return resolve();
+        const err = new Error(`Telegram: ${parsed.description} (${parsed.error_code})`);
+        // 4xx es el mensaje o el token, salvo 429 (límite de envío): reintentar no lo arregla.
+        err.permanente = parsed.error_code >= 400 && parsed.error_code < 500 && parsed.error_code !== 429;
+        reject(err);
       });
     });
     req.on('error', reject);
@@ -200,11 +253,12 @@ function isValidEmail(addr) {
 }
 
 function sendEmail(to, subject, message) {
+  const permanente = msg => Object.assign(new Error(msg), { permanente: true });
   if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
-    return Promise.reject(new Error('Email: faltan GMAIL_USER o GMAIL_APP_PASSWORD en .env'));
+    return Promise.reject(permanente('Email: faltan GMAIL_USER o GMAIL_APP_PASSWORD en .env'));
   }
   if (!isValidEmail(to)) {
-    return Promise.reject(new Error(`Email: dirección inválida: ${to}`));
+    return Promise.reject(permanente(`Email: dirección inválida: ${to}`));
   }
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -215,6 +269,10 @@ function sendEmail(to, subject, message) {
     to,
     subject: subject || '(sin asunto)',
     text:    message
+  }).catch(err => {
+    // Autenticación o rechazo definitivo del servidor (5xx SMTP); el resto (red, 4xx) es transitorio.
+    err.permanente = err.code === 'EAUTH' || err.responseCode >= 500;
+    throw err;
   });
 }
 
@@ -521,10 +579,10 @@ function fireAnalyzeHook(id) {
 async function processBatch(db) {
   const rows = db.prepare(`
     SELECT * FROM queue
-    WHERE status = 'pending' AND retries < ?
+    WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))
     ORDER BY priority ASC, created_at ASC
     LIMIT ?
-  `).all(MAX_RETRIES, BATCH_SIZE);
+  `).all(BATCH_SIZE);
 
   for (const row of rows) {
     if (isInDnd(row.channel)) {
@@ -532,29 +590,40 @@ async function processBatch(db) {
       log(`dnd: skipped id=${row.id} channel=${row.channel} (DND ${DND_START}-${DND_END}h)`);
       continue;
     }
+    // Encolado y nunca intentado a tiempo (p. ej. el notifier estuvo parado): mismo vencimiento que un reintento.
+    if (vencido(row)) {
+      db.prepare(`UPDATE queue SET status='failed', next_attempt_at=NULL WHERE id=?`).run(row.id);
+      log(`vencido id=${row.id} channel=${row.channel} source=${row.source} creado=${fmtTime(row.created_at)} — no se manda`);
+      continue;
+    }
     try {
       const ts   = fmtTime(row.created_at);
       const tags = etiquetas(row.source);
-      const telegram = () => sendTelegram(`[${ts}] ${prefijarTexto(row.message, tags, { html: true })}`,
+      const tarde = atrasado(row);
+      const telegram = () => sendTelegram(`[${ts}] ${tarde ? '⏰ atrasado ' : ''}${prefijarTexto(row.message, tags, { html: true })}`,
                                           !!(row.silent || isDndTime()));
+      const voz = () => (tarde ? `Aviso atrasado, de las ${ts.slice(6)}. ` : '') + prefijarVoz(row.message, tags);
       if (row.channel === 'telegram')    await telegram();
-      if (row.channel === 'google_home') await sendGoogleHome(prefijarVoz(row.message, tags));
-      if (row.channel === 'wiim')        await sendWiim(prefijarVoz(row.message, tags));
+      if (row.channel === 'google_home') await sendGoogleHome(voz());
+      if (row.channel === 'wiim')        await sendWiim(voz());
       if (row.channel === 'lights')      await sendLights(row.priority, telegram, () => !!db.prepare(`
         SELECT 1 FROM queue WHERE channel = 'telegram' AND source = ? AND message = ?
           AND abs(strftime('%s', created_at) - strftime('%s', ?)) <= ? LIMIT 1
       `).get(row.source, row.message, row.created_at, MISMO_AVISO_S));
-      if (row.channel === 'email')       await sendEmail(row.email_to, prefijarTexto(row.email_subject || '(sin asunto)', tags), row.message);
+      if (row.channel === 'email')       await sendEmail(row.email_to,
+        (tarde ? '[atrasado] ' : '') + prefijarTexto(row.email_subject || '(sin asunto)', tags),
+        tarde ? `Encolado el ${ts}, entregado con atraso.\n\n${row.message}` : row.message);
       db.prepare(`UPDATE queue SET status='sent', sent_at=datetime('now') WHERE id=?`).run(row.id);
-      log(`sent id=${row.id} channel=${row.channel} silent=${row.silent} source=${tags.proceso}${tags.esPrueba ? ' PRUEBA' : ''}`);
+      log(`sent id=${row.id} channel=${row.channel} silent=${row.silent} source=${tags.proceso}${tags.esPrueba ? ' PRUEBA' : ''}${tarde ? ` atrasado creado=${ts}` : ''}`);
       // Coreografía: si el evento pide análisis, disparar el hook recién ahora
       // (status='sent' garantiza que el incidente ya se entregó antes del análisis).
       if (row.analyze) fireAnalyzeHook(row.id);
     } catch (err) {
-      const retries   = row.retries + 1;
-      const newStatus = retries >= MAX_RETRIES ? 'failed' : 'pending';
-      db.prepare(`UPDATE queue SET retries=?, status=? WHERE id=?`).run(retries, newStatus, row.id);
-      log(`error id=${row.id} retries=${retries} status=${newStatus} — ${err.message}`);
+      const t = trasFalla(row, err);
+      db.prepare(`UPDATE queue SET retries=?, status=?, next_attempt_at=? WHERE id=?`)
+        .run(t.retries, t.status, t.next_attempt_at, row.id);
+      const sigue = t.status === 'pending' ? `próximo intento ${t.next_attempt_at} UTC` : `(${t.motivo})`;
+      log(`error id=${row.id} retries=${t.retries} status=${t.status} ${sigue} — ${err.message}`);
     }
   }
 }
@@ -568,7 +637,7 @@ function main() {
 
   const db = initDb();
   startTtsServer();
-  log(`iniciado | db=${DB_PATH} | poll=${POLL_INTERVAL}ms | max_retries=${MAX_RETRIES} | tts_ip=${getLocalIp()} | retention=${QUEUE_RETENTION_DAYS}d`);
+  log(`iniciado | db=${DB_PATH} | poll=${POLL_INTERVAL}ms | max_retries=${MAX_RETRIES} (permanentes) | reintento=${REINTENTO_BASE_S}-${REINTENTO_MAX_S}s | vence=${VENCIMIENTO_TEXTO_H}h texto, ${VENCIMIENTO_AL_OIDO_MIN}min voz/luces | tts_ip=${getLocalIp()} | retention=${QUEUE_RETENTION_DAYS}d`);
 
   purgeOldRecords(db);
   setInterval(() => purgeOldRecords(db), 60 * 60 * 1000);
@@ -591,5 +660,6 @@ function main() {
 // levantar el poll contra la cola real.
 if (require.main === module) main();
 
-// Exportado solo para los tests de etiquetado (test_etiquetas.js).
-module.exports = { etiquetas, prefijarTexto, prefijarVoz, yaEtiquetado, generateTts, rellenarWav, wavDePcm };
+// Exportado solo para los tests (test_etiquetas.js, test_wav.js, test_reintentos.js).
+module.exports = { etiquetas, prefijarTexto, prefijarVoz, yaEtiquetado, generateTts, rellenarWav, wavDePcm,
+                   esperaS, vencido, atrasado, trasFalla, processBatch, initDb };
