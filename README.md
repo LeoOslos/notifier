@@ -2,6 +2,9 @@
 
 Servicio centralizado de notificaciones con cola persistente SQLite. Corre como proceso PM2 y soporta cuatro canales: Telegram, Google Home (TTS por Cast), Email (Gmail SMTP) y Lights (LIFX via HA).
 
+Explicación para quien no conoce el proyecto, en lenguaje simple y con detalle técnico opcional:
+[Cómo funciona](#cómo-funciona-explicado).
+
 ## Arquitectura
 
 ```
@@ -198,7 +201,7 @@ HA_TOKEN=<long-lived access token de Home Assistant>
   cuál habló: `tts: gemini Kore` o `tts: gemini falló (...) → piper`.
 - Antes de la voz suena un chime: es del propio Google Home al abrir la sesión de Cast
   (probado casteando un audio inexistente: suena igual). No sale del notifier.
-- Sirve el WAV por HTTP desde `wlo1` (IP WiFi: 192.168.0.100), puerto 9876.
+- Sirve el WAV por HTTP desde la IP de `wlo1` (la WiFi de Mint, 192.168.1.135), puerto 9876.
 - Castea al dispositivo cuyo nombre contenga `GOOGLE_HOME_DEVICE` (substring, case-insensitive). Si está vacío, castea a todos.
 - En DND: se marca `skipped` inmediatamente, nunca se entrega.
 
@@ -385,3 +388,96 @@ Entradas relevantes:
 - `error id=N retries=M status=expired (vencido)` — no se entrega más: no hubo red a tiempo
 - `vencido id=N` — llegó a su turno ya vencido (p. ej. el notifier estuvo parado)
 - `sent id=N ... atrasado creado=dd/mm HH:MM` — entregado con atraso
+
+## Cómo funciona, explicado
+
+Cada pieza tiene una explicación simple, dónde vive (📍), qué es en la jerga de la industria (🏷️) y,
+para quien quiera profundizar, un bloque *Por dentro*.
+
+**El problema:** decenas de procesos (cierres, chequeos, vigías) necesitan avisar algo. Si cada uno
+mandara su propio Telegram o hablara por el parlante, habría credenciales repetidas por todos lados,
+avisos a las 3 de la mañana y nadie sabría quién mandó qué. Este proyecto es el **único que
+entrega**: los demás solo dejan el aviso y él decide cómo y cuándo sale.
+
+### 1. Cómo se deja un aviso
+
+**La cola** (`queue.db`) — el **buzón de salida**: cada proceso deja su aviso con el canal, la
+prioridad y quién lo manda, y sigue con lo suyo sin esperar.\
+📍 Mint, en `~/notifier/queue.db` (nunca en Git).\
+🏷️ *Cola de mensajes* (message queue) persistente, hecha sobre SQLite. Otras implementaciones:
+RabbitMQ, Redis, Amazon SQS. Acá alcanza una base local porque todos los productores están en Mint.
+> *Por dentro:* desde Python se encola con `client.notify(...)` (`client.py`) y desde la consola
+> con `node enqueue.js`. El campo `source` dice qué proceso encoló; si no se pasa, se deduce del
+> script. Con `prueba=True`, el `source` lleva `/prueba` y el aviso sale marcado `[PRUEBA]`.
+
+### 2. Quién lo entrega
+
+**El despachador** (`notifier.js`) — el **cartero**: cada 2 segundos revisa la cola, toma los
+avisos por orden de prioridad y los manda por el canal pedido.\
+📍 Mint, como proceso `notifier` de pm2.\
+🏷️ *Worker* (proceso trabajador) que consume la cola por *polling* (mirar cada tanto). Hecho en
+Node.js, un entorno para correr JavaScript fuera del navegador.
+> *Por dentro:* delante de cada mensaje pone la hora del evento y `[proceso]`. Si un envío falla por
+> algo pasajero (sin red, error 5xx del servidor, 429 por exceso de pedidos), lo reintenta con
+> esperas crecientes hasta que **vence**: 3 horas los de texto, 30 minutos los de voz y luces. Un
+> aviso viejo informa mal, así que vencido no se manda. Es el modelo de la cola de Postfix (BL-279).
+
+**El horario de silencio** (DND, Do Not Disturb, no molestar) — de 23 a 8 no habla el parlante ni
+parpadean las luces; Telegram llega sin sonido y el mail, igual.\
+📍 Mint, en el `.env` del proyecto (`DND_START`, `DND_END`, `DND_CHANNELS`).\
+🏷️ *Quiet hours* (horas de silencio), como el modo "no molestar" de un celular.
+> *Por dentro:* un aviso de voz en horario de silencio se marca `skipped` y no se entrega nunca: al
+> amanecer no hay catarata de avisos viejos.
+
+### 3. Por dónde sale
+
+**Telegram** — el canal por defecto: un mensaje en el celular, silencioso salvo que se pida sonido.\
+📍 Internet: la API (Application Programming Interface) de bots de Telegram (`api.telegram.org`).
+El token del bot está en `.env`.\
+🏷️ *Mensajería instantánea vía bot*. Otras: Pushover, ntfy, Slack.
+
+**Email** — para lo que conviene que quede en la casilla.\
+📍 Internet: Gmail por SMTP (Simple Mail Transfer Protocol), con una *contraseña de aplicación* en
+`.env`. El remitente es siempre `notifier`; el proceso que avisa va en el asunto.\
+🏷️ *Correo transaccional*. Otras: SendGrid, Amazon SES, un servidor propio (Postfix).
+
+**La voz** (Google Home y WiiM) — el aviso **dicho en voz alta** por un parlante de la casa.\
+📍 La voz se genera en internet con Gemini, de Google; si falla, la genera Piper **en Mint**, sin
+internet. El audio lo sirve Mint en la LAN (Local Area Network, la red de casa), puerto `9876`, y lo
+reproduce el parlante: el Google Home Mini por Cast, o el WiiM Amp (`192.168.1.147`) por su API.\
+🏷️ TTS (Text-to-Speech, texto a voz). Gemini TTS es un servicio en la nube; Piper es un motor
+local, como eSpeak o Coqui. Cast es el protocolo de Google para mandar audio a un parlante.
+> *Por dentro:* la voz es `Kore` (`gemini-2.5-flash-preview-tts`) y la de respaldo,
+> `es_AR-daniela-high`. Antes de hablar se saca el mute y se fija un volumen de aviso; al terminar se
+> devuelve el que había. El parlante descarga el WAV desde la IP WiFi de Mint (interfaz `wlo1`),
+> porque es la que alcanzan los equipos Cast. Si el WiiM está tocando música, el aviso va al Google
+> Home para no cortarla. Al WAV del WiiM se le agrega 1,5 s de silencio, porque el WiiM se come el
+> final.
+
+**Las luces** — un **parpadeo** de las luces LIFX: rojo urgente, rojo suave o azul, según la
+prioridad. No dicen nada, solo llaman la atención.\
+📍 Mint: se piden a Home Assistant (`localhost:8123`), que maneja las luces en la LAN.\
+🏷️ *Notificación visual* por automatización del hogar.
+> *Por dentro:* si las luces están siguiendo la música (`luces-musica`), el aviso va por Telegram en
+> vez de las luces, porque un pulso no se distinguiría.
+
+### 4. El análisis automático
+
+**El enganche con el analyzer** — algunos avisos son de una **falla**: además de entregarlos, el
+notifier le avisa al `analyzer` para que la investigue y abra un incidente.\
+📍 Mint: al pasar a `sent` un aviso con `analyze=1`, se ejecuta el comando de `ANALYZE_HOOK_CMD`
+(`~/analyzer/run_analyzer.sh`).\
+🏷️ *Hook* (enganche) por evento: el notifier no sabe qué hay del otro lado, solo corre el comando.
+
+### 5. Cuándo sale a internet
+
+Siempre conexiones que inicia Mint:
+
+- **Telegram** (`api.telegram.org`, HTTPS —HyperText Transfer Protocol Secure—, puerto 443): cada aviso por ese canal.
+- **Gmail** (`smtp.gmail.com`, SMTP sobre TLS —Transport Layer Security—): cada mail.
+- **Gemini** (`generativelanguage.googleapis.com`, 443): cada aviso por voz, para generar el audio.
+
+Lo demás queda en la LAN: el parlante baja el audio de Mint (puerto 9876, abierto solo a la red de
+casa) y las luces van por Home Assistant, en Mint.
+> *Por dentro:* sin internet, Telegram y el mail se reintentan hasta vencer, y la voz sale igual con
+> Piper. Así, la voz y las luces son lo único que llega durante un corte.
