@@ -345,17 +345,15 @@ CREATE TABLE queue (
 
 ## Red local — notas críticas
 
-La máquina tiene dos interfaces:
-- `eno1` → 192.168.0.101 (Ethernet)
-- `wlo1` → 192.168.0.100 (WiFi)
+Mint tiene dos interfaces: `eno1` (cable) y `wlo1` (WiFi). Las IP las reserva el router Tenda por MAC
+y están en `~/iot-inventory.md`; acá no se copian (`~/CLAUDE.md`, «La red vieja»).
 
-Los Google Home están en WiFi y descargan el MP3 **desde la IP WiFi** (192.168.0.100). El servidor TTS debe estar accesible desde esa interfaz, y el puerto debe estar abierto en UFW:
+Los Google Home están en WiFi y descargan el audio **desde la IP WiFi de Mint**: el notifier toma la
+IP de `wlo1` en cada envío (`getLocalIp()` en `notifier.js`). El puerto 9876 tiene que estar abierto
+en ufw (ya lo está; regla versionada en `mint-config/firewall_up.sh`).
 
-```bash
-sudo ufw allow 9876/tcp
-```
-
-El control Cast (pychromecast → dispositivo) funciona desde cualquier IP. La restricción es el sentido inverso: el dispositivo bajando el audio.
+El control Cast (pychromecast → dispositivo) funciona desde cualquier IP. La restricción es el sentido
+inverso: el dispositivo bajando el audio.
 
 HTTP local es suficiente — no se necesita HTTPS.
 
@@ -363,12 +361,9 @@ HTTP local es suficiente — no se necesita HTTPS.
 
 ## Dispositivos en la red
 
-| Nombre | IP | Tipo |
-|--------|----|------|
-| Mini | 192.168.0.122 | Google Home Mini |
-| Mini (2) | 192.168.0.53 | Google Home Mini |
-| Hub | 192.168.0.134 | Google Nest Hub |
-| The TV | 192.168.0.106 | Chromecast |
+Los parlantes Cast se descubren por mDNS (Multicast DNS) en cada envío, y se elige por nombre con
+`GOOGLE_HOME_DEVICE`; el WiiM va por `WIIM_HOST`. La lista de equipos con su IP y MAC está en
+`~/iot-inventory.md`.
 
 ---
 
