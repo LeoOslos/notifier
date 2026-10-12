@@ -1,0 +1,24 @@
+{
+    "files": {
+        "./cast_google_home.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./client.py": [
+            {
+                "code": "reportReturnType",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 17,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
